@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeSanitize from "rehype-sanitize";
 import { getNoteById, getNotes } from "@/lib/db";
 import { getAuthUserId } from "@/lib/auth";
 import { Header } from "@/components/notes/header";
@@ -117,7 +118,10 @@ export default async function NotePage({ params }: PageProps) {
           </header>
 
           <div className="prose prose-neutral dark:prose-invert max-w-none">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={[rehypeSanitize]}
+            >
               {note.content}
             </ReactMarkdown>
           </div>
