@@ -4,8 +4,10 @@ import { NotesPageClient } from "@/components/notes/notes-page-client";
 
 export const dynamic = "force-dynamic";
 
+const DEFAULT_USER_ID = "default-user";
+
 export default async function HomePage() {
-  const [notes, categories] = await Promise.all([getNotes(), getCategories()]);
+  const [notes, categories] = await Promise.all([getNotes(DEFAULT_USER_ID), getCategories(DEFAULT_USER_ID)]);
 
   return (
     <div className="min-h-screen bg-background">

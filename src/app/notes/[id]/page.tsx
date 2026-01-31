@@ -12,6 +12,8 @@ import { DeleteNoteButton } from "./delete-button";
 
 export const dynamic = "force-dynamic";
 
+const DEFAULT_USER_ID = "default-user";
+
 interface PageProps {
   params: Promise<{ id: string }>;
 }
@@ -28,7 +30,7 @@ function formatDate(date: Date | string): string {
 
 export default async function NotePage({ params }: PageProps) {
   const { id } = await params;
-  const note = await getNoteById(parseInt(id));
+  const note = await getNoteById(parseInt(id), DEFAULT_USER_ID);
 
   if (!note) {
     notFound();
@@ -37,7 +39,7 @@ export default async function NotePage({ params }: PageProps) {
   // Get related notes (same category)
   let relatedNotes: Awaited<ReturnType<typeof getNotes>> = [];
   if (note.category) {
-    const allNotes = await getNotes(undefined, note.category);
+    const allNotes = await getNotes(DEFAULT_USER_ID, undefined, note.category);
     relatedNotes = allNotes.filter((n) => n.id !== note.id).slice(0, 3);
   }
 

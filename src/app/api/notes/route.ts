@@ -1,13 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getNotes, createNote } from "@/lib/db";
 
+const DEFAULT_USER_ID = "default-user";
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const search = searchParams.get("search") || undefined;
     const category = searchParams.get("category") || undefined;
 
-    const notes = await getNotes(search, category);
+    const notes = await getNotes(DEFAULT_USER_ID, search, category);
     return NextResponse.json(notes);
   } catch (error) {
     console.error("Error fetching notes:", error);
@@ -33,6 +35,7 @@ export async function POST(request: NextRequest) {
     const note = await createNote({
       title,
       content,
+      user_id: DEFAULT_USER_ID,
       category,
       tags,
       priority,

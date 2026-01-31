@@ -5,6 +5,8 @@ import { NoteEditor } from "@/components/notes/note-editor";
 
 export const dynamic = "force-dynamic";
 
+const DEFAULT_USER_ID = "default-user";
+
 interface PageProps {
   params: Promise<{ id: string }>;
 }
@@ -12,8 +14,8 @@ interface PageProps {
 export default async function EditNotePage({ params }: PageProps) {
   const { id } = await params;
   const [note, categories] = await Promise.all([
-    getNoteById(parseInt(id)),
-    getCategories(),
+    getNoteById(parseInt(id), DEFAULT_USER_ID),
+    getCategories(DEFAULT_USER_ID),
   ]);
 
   if (!note) {

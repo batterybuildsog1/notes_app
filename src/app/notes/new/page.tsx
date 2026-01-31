@@ -4,8 +4,10 @@ import { NoteEditor } from "@/components/notes/note-editor";
 
 export const dynamic = "force-dynamic";
 
+const DEFAULT_USER_ID = "default-user";
+
 export default async function NewNotePage() {
-  const categories = await getCategories();
+  const categories = await getCategories(DEFAULT_USER_ID);
 
   return (
     <div className="min-h-screen bg-background">
