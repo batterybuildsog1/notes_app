@@ -17,10 +17,36 @@ export interface Note {
 }
 
 export async function getNotes(userId: string, search?: string, category?: string): Promise<Note[]> {
-  if (category && category !== "all") {
+  const hasSearch = search && search.trim().length > 0;
+  const hasCategory = category && category !== "all";
+  const searchPattern = hasSearch ? `%${search.trim()}%` : null;
+
+  if (hasSearch && hasCategory) {
+    const rows = await sql`
+      SELECT * FROM notes
+      WHERE user_id = ${userId}
+        AND category = ${category}
+        AND (title ILIKE ${searchPattern} OR content ILIKE ${searchPattern})
+      ORDER BY updated_at DESC
+    `;
+    return rows as Note[];
+  }
+
+  if (hasSearch) {
+    const rows = await sql`
+      SELECT * FROM notes
+      WHERE user_id = ${userId}
+        AND (title ILIKE ${searchPattern} OR content ILIKE ${searchPattern})
+      ORDER BY updated_at DESC
+    `;
+    return rows as Note[];
+  }
+
+  if (hasCategory) {
     const rows = await sql`SELECT * FROM notes WHERE user_id = ${userId} AND category = ${category} ORDER BY updated_at DESC`;
     return rows as Note[];
   }
+
   const rows = await sql`SELECT * FROM notes WHERE user_id = ${userId} ORDER BY updated_at DESC`;
   return rows as Note[];
 }
