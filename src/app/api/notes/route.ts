@@ -1,15 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getNotes, createNote } from "@/lib/db";
-
-const DEFAULT_USER_ID = "default-user";
+import { getAuthUserId } from "@/lib/auth";
 
 export async function GET(request: NextRequest) {
   try {
+    const userId = await getAuthUserId();
+    if (!userId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
     const search = searchParams.get("search") || undefined;
     const category = searchParams.get("category") || undefined;
 
-    const notes = await getNotes(DEFAULT_USER_ID, search, category);
+    const notes = await getNotes(userId, search, category);
     return NextResponse.json(notes);
   } catch (error) {
     console.error("Error fetching notes:", error);
@@ -22,6 +26,11 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const userId = await getAuthUserId();
+    if (!userId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const body = await request.json();
     const { title, content, category, tags, priority, project } = body;
 
@@ -35,7 +44,7 @@ export async function POST(request: NextRequest) {
     const note = await createNote({
       title,
       content,
-      user_id: DEFAULT_USER_ID,
+      user_id: userId,
       category,
       tags,
       priority,

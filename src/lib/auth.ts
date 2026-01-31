@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { Pool } from "pg";
+import { headers } from "next/headers";
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -25,3 +26,26 @@ export const auth = betterAuth({
     "http://localhost:3000",
   ],
 });
+
+/**
+ * Get the current authenticated user's ID from the session.
+ * Returns null if not authenticated.
+ */
+export async function getAuthUserId(): Promise<string | null> {
+  const headersList = await headers();
+  const session = await auth.api.getSession({
+    headers: headersList,
+  });
+  return session?.user?.id ?? null;
+}
+
+/**
+ * Get the full session object for the current user.
+ * Returns null if not authenticated.
+ */
+export async function getAuthSession() {
+  const headersList = await headers();
+  return auth.api.getSession({
+    headers: headersList,
+  });
+}

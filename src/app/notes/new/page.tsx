@@ -1,13 +1,18 @@
+import { redirect } from "next/navigation";
 import { getCategories } from "@/lib/db";
+import { getAuthUserId } from "@/lib/auth";
 import { Header } from "@/components/notes/header";
 import { NoteEditor } from "@/components/notes/note-editor";
 
 export const dynamic = "force-dynamic";
 
-const DEFAULT_USER_ID = "default-user";
-
 export default async function NewNotePage() {
-  const categories = await getCategories(DEFAULT_USER_ID);
+  const userId = await getAuthUserId();
+  if (!userId) {
+    redirect("/login");
+  }
+
+  const categories = await getCategories(userId);
 
   return (
     <div className="min-h-screen bg-background">

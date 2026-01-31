@@ -1,21 +1,30 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { getNoteById, getCategories } from "@/lib/db";
+import { getAuthUserId } from "@/lib/auth";
 import { Header } from "@/components/notes/header";
 import { NoteEditor } from "@/components/notes/note-editor";
 
 export const dynamic = "force-dynamic";
-
-const DEFAULT_USER_ID = "default-user";
 
 interface PageProps {
   params: Promise<{ id: string }>;
 }
 
 export default async function EditNotePage({ params }: PageProps) {
+  const userId = await getAuthUserId();
+  if (!userId) {
+    redirect("/login");
+  }
+
   const { id } = await params;
+  const noteId = parseInt(id);
+  if (isNaN(noteId) || noteId <= 0) {
+    notFound();
+  }
+
   const [note, categories] = await Promise.all([
-    getNoteById(parseInt(id), DEFAULT_USER_ID),
-    getCategories(DEFAULT_USER_ID),
+    getNoteById(noteId, userId),
+    getCategories(userId),
   ]);
 
   if (!note) {

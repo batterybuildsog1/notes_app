@@ -1,8 +1,9 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getNoteById, getNotes } from "@/lib/db";
+import { getAuthUserId } from "@/lib/auth";
 import { Header } from "@/components/notes/header";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -11,8 +12,6 @@ import { ArrowLeft, Edit, Calendar, Tag, Folder } from "lucide-react";
 import { DeleteNoteButton } from "./delete-button";
 
 export const dynamic = "force-dynamic";
-
-const DEFAULT_USER_ID = "default-user";
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -29,8 +28,18 @@ function formatDate(date: Date | string): string {
 }
 
 export default async function NotePage({ params }: PageProps) {
+  const userId = await getAuthUserId();
+  if (!userId) {
+    redirect("/login");
+  }
+
   const { id } = await params;
-  const note = await getNoteById(parseInt(id), DEFAULT_USER_ID);
+  const noteId = parseInt(id);
+  if (isNaN(noteId) || noteId <= 0) {
+    notFound();
+  }
+
+  const note = await getNoteById(noteId, userId);
 
   if (!note) {
     notFound();
@@ -39,7 +48,7 @@ export default async function NotePage({ params }: PageProps) {
   // Get related notes (same category)
   let relatedNotes: Awaited<ReturnType<typeof getNotes>> = [];
   if (note.category) {
-    const allNotes = await getNotes(DEFAULT_USER_ID, undefined, note.category);
+    const allNotes = await getNotes(userId, undefined, note.category);
     relatedNotes = allNotes.filter((n) => n.id !== note.id).slice(0, 3);
   }
 

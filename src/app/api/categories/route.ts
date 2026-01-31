@@ -1,11 +1,15 @@
 import { NextResponse } from "next/server";
 import { getCategories } from "@/lib/db";
-
-const DEFAULT_USER_ID = "default-user";
+import { getAuthUserId } from "@/lib/auth";
 
 export async function GET() {
   try {
-    const categories = await getCategories(DEFAULT_USER_ID);
+    const userId = await getAuthUserId();
+    if (!userId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const categories = await getCategories(userId);
     return NextResponse.json(categories);
   } catch (error) {
     console.error("Error fetching categories:", error);

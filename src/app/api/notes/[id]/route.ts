@@ -1,15 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getNoteById, updateNote, deleteNote } from "@/lib/db";
-
-const DEFAULT_USER_ID = "default-user";
+import { getAuthUserId } from "@/lib/auth";
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const userId = await getAuthUserId();
+    if (!userId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const { id } = await params;
-    const note = await getNoteById(parseInt(id), DEFAULT_USER_ID);
+    const noteId = parseInt(id);
+    if (isNaN(noteId) || noteId <= 0) {
+      return NextResponse.json({ error: "Invalid note ID" }, { status: 400 });
+    }
+
+    const note = await getNoteById(noteId, userId);
 
     if (!note) {
       return NextResponse.json({ error: "Note not found" }, { status: 404 });
@@ -30,11 +39,21 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const userId = await getAuthUserId();
+    if (!userId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const { id } = await params;
+    const noteId = parseInt(id);
+    if (isNaN(noteId) || noteId <= 0) {
+      return NextResponse.json({ error: "Invalid note ID" }, { status: 400 });
+    }
+
     const body = await request.json();
     const { title, content, category, tags, priority, project } = body;
 
-    const note = await updateNote(parseInt(id), DEFAULT_USER_ID, {
+    const note = await updateNote(noteId, userId, {
       title,
       content,
       category,
@@ -62,8 +81,18 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const userId = await getAuthUserId();
+    if (!userId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const { id } = await params;
-    await deleteNote(parseInt(id), DEFAULT_USER_ID);
+    const noteId = parseInt(id);
+    if (isNaN(noteId) || noteId <= 0) {
+      return NextResponse.json({ error: "Invalid note ID" }, { status: 400 });
+    }
+
+    await deleteNote(noteId, userId);
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("Error deleting note:", error);

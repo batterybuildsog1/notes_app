@@ -1,13 +1,21 @@
+import { redirect } from "next/navigation";
 import { getNotes, getCategories } from "@/lib/db";
+import { getAuthUserId } from "@/lib/auth";
 import { Header } from "@/components/notes/header";
 import { NotesPageClient } from "@/components/notes/notes-page-client";
 
 export const dynamic = "force-dynamic";
 
-const DEFAULT_USER_ID = "default-user";
-
 export default async function HomePage() {
-  const [notes, categories] = await Promise.all([getNotes(DEFAULT_USER_ID), getCategories(DEFAULT_USER_ID)]);
+  const userId = await getAuthUserId();
+  if (!userId) {
+    redirect("/login");
+  }
+
+  const [notes, categories] = await Promise.all([
+    getNotes(userId),
+    getCategories(userId),
+  ]);
 
   return (
     <div className="min-h-screen bg-background">
