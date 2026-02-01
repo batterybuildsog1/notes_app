@@ -273,16 +273,30 @@ export function getPageTitle(page: NotionPage): string {
 export async function createNotionPage(
   title: string,
   content: string,
-  parentPageId?: string
+  parentPageId?: string,
+  originalCreatedAt?: Date | string | null
 ): Promise<NotionPage> {
   const parent = parentPageId || NOTION_PARENT_PAGE_ID;
-  
+
   if (!parent) {
     throw new Error("No parent page ID configured for creating Notion pages. Set NOTION_PARENT_PAGE_ID.");
   }
 
   // Convert markdown to Notion blocks
   const blocks = markdownToBlocks(content);
+
+  // Prepend callout with original creation date if available
+  if (originalCreatedAt) {
+    const dateStr = new Date(originalCreatedAt).toISOString().split('T')[0];
+    blocks.unshift({
+      object: "block",
+      type: "callout",
+      callout: {
+        rich_text: [{ type: "text", text: { content: `Originally created: ${dateStr}` } }],
+        icon: { emoji: "📅" }
+      }
+    });
+  }
 
   const body = {
     parent: {

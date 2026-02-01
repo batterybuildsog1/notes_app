@@ -137,12 +137,22 @@ export async function updateNote(
     tags?: string[];
     priority?: string;
     project?: string;
+    original_created_at?: Date | string | null;
+    original_updated_at?: Date | string | null;
   }
 ): Promise<Note | null> {
   const existing = await getNoteById(id, userId);
   if (!existing) return null;
 
   const tagsArray = data.tags && data.tags.length > 0 ? data.tags : existing.tags;
+
+  // Handle original date fields - only update if explicitly provided
+  const originalCreatedAt = data.original_created_at !== undefined
+    ? (data.original_created_at ? new Date(data.original_created_at).toISOString() : null)
+    : existing.original_created_at;
+  const originalUpdatedAt = data.original_updated_at !== undefined
+    ? (data.original_updated_at ? new Date(data.original_updated_at).toISOString() : null)
+    : existing.original_updated_at;
 
   const rows = await sql`
     UPDATE notes
@@ -153,6 +163,8 @@ export async function updateNote(
       tags = ${tagsArray},
       priority = ${data.priority ?? existing.priority},
       project = ${data.project ?? existing.project},
+      original_created_at = ${originalCreatedAt},
+      original_updated_at = ${originalUpdatedAt},
       updated_at = NOW()
     WHERE id = ${id} AND user_id = ${userId}
     RETURNING *

@@ -36,6 +36,8 @@ interface Note {
   notion_last_edited: Date | null;
   created_at: Date;
   updated_at: Date;
+  original_created_at: Date | null;
+  original_updated_at: Date | null;
 }
 
 /**
@@ -341,8 +343,13 @@ async function pushToNotion(userId: string): Promise<{
 
   for (const note of notes) {
     try {
-      // Create page in Notion
-      const page = await createNotionPage(note.title, note.content);
+      // Create page in Notion with original date
+      const page = await createNotionPage(
+        note.title,
+        note.content,
+        undefined,
+        note.original_created_at || note.created_at
+      );
 
       // Update note with notion_page_id
       await sql`
