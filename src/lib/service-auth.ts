@@ -74,3 +74,18 @@ export function checkServiceAuth(request: NextRequest): ServiceAuth {
 export function getServiceAccountNames(): string[] {
   return Array.from(getServiceAccounts().values());
 }
+
+/**
+ * Simple validation check - returns boolean
+ */
+export function validateServiceAuth(request: NextRequest): boolean {
+  const auth = checkServiceAuth(request);
+  return auth.authenticated;
+}
+
+/**
+ * Get the service user ID from environment
+ */
+export function getServiceUserId(): string {
+  return process.env.SERVICE_USER_ID || "";
+}

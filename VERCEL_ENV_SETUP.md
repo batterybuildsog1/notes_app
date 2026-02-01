@@ -16,6 +16,10 @@ Add these to Vercel Dashboard → Settings → Environment Variables:
 - `OPENAI_API_KEY` - Your OpenAI API key (for embeddings)
 - `XAI_API_KEY` - Your xAI/Grok API key (for tag suggestions)
 
+## New - Notion Sync
+- `NOTION_API_KEY` - Your Notion integration API key (from Clawdbot config)
+- `NOTION_PARENT_PAGE_ID` - (optional) Page ID where new notes will be created in Notion. Required for push (Notes App → Notion). Leave blank to disable push.
+
 ## How to Add
 
 1. Go to https://vercel.com/alan-sunhomesios-projects/notes
@@ -34,4 +38,18 @@ Test service auth:
 ```bash
 curl -H "X-API-Key: 3b6276d9ef46f1741c3951ae4044410651ea01da2068c813602ed48e85c918da" \
   https://notes.sunhomes.io/api/notes/stats
+```
+
+Test Notion sync status:
+```bash
+curl -H "X-API-Key: 3b6276d9ef46f1741c3951ae4044410651ea01da2068c813602ed48e85c918da" \
+  https://notes.sunhomes.io/api/sync/notion
+```
+
+Trigger Notion sync (pull only):
+```bash
+curl -X POST -H "X-API-Key: 3b6276d9ef46f1741c3951ae4044410651ea01da2068c813602ed48e85c918da" \
+  -H "Content-Type: application/json" \
+  -d '{"direction": "pull"}' \
+  https://notes.sunhomes.io/api/sync/notion
 ```
