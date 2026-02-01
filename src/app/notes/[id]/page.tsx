@@ -82,7 +82,7 @@ export default async function NotePage({ params }: PageProps) {
             <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
               <div className="flex items-center gap-1">
                 <Calendar className="h-4 w-4" />
-                {formatDate(note.updated_at)}
+                {formatDate(note.display_updated_at || note.updated_at)}
               </div>
               {note.category && (
                 <div className="flex items-center gap-1">

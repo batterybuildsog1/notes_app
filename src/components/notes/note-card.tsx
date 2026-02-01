@@ -7,10 +7,21 @@ import type { Note } from "@/lib/db";
 
 function formatDate(date: Date | string): string {
   const d = new Date(date);
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+  // Relative dates for recent items
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7) return `${diffDays} days ago`;
+
+  // For older items, show the date
+  const sameYear = d.getFullYear() === now.getFullYear();
   return d.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
-    year: "numeric",
+    year: sameYear ? undefined : "numeric",
   });
 }
 
@@ -64,7 +75,7 @@ export function NoteCard({ note }: NoteCardProps) {
               )}
             </div>
             <span className="text-xs text-muted-foreground">
-              {formatDate(note.updated_at)}
+              {formatDate(note.display_updated_at || note.updated_at)}
             </span>
           </div>
         </CardContent>

@@ -78,7 +78,13 @@ export async function getNotes(userId: string, search?: string, category?: strin
 }
 
 export async function getNoteById(id: number, userId: string): Promise<Note | null> {
-  const rows = await sql`SELECT * FROM notes WHERE id = ${id} AND user_id = ${userId}`;
+  const rows = await sql`
+    SELECT *,
+      COALESCE(original_created_at, created_at) as display_created_at,
+      COALESCE(original_updated_at, updated_at) as display_updated_at
+    FROM notes 
+    WHERE id = ${id} AND user_id = ${userId}
+  `;
   return rows[0] as Note | null;
 }
 
