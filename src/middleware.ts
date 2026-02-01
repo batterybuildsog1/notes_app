@@ -1,31 +1,50 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionCookie } from "better-auth/cookies";
 
+// Routes that don't require authentication
+const PUBLIC_ROUTES = ["/login", "/api/auth", "/api/health"];
+
+// Check if route is public
+function isPublicRoute(pathname: string): boolean {
+  return PUBLIC_ROUTES.some(
+    (route) => pathname === route || pathname.startsWith(route + "/")
+  );
+}
+
+// Check if request has valid service API key
+function hasValidApiKey(request: NextRequest): boolean {
+  const apiKey = request.headers.get("X-API-Key");
+  if (!apiKey) return false;
+
+  // API keys are validated in the route handlers via service-auth.ts
+  // Here we just check if the header is present
+  return apiKey.length > 0;
+}
+
 export async function middleware(request: NextRequest) {
+  const pathname = request.nextUrl.pathname;
   const sessionCookie = getSessionCookie(request);
+  const isApiRoute = pathname.startsWith("/api/");
 
-  // Allow access to login page and auth API routes
-  const isLoginPage = request.nextUrl.pathname === "/login";
-  const isAuthRoute = request.nextUrl.pathname.startsWith("/api/auth");
-  const isApiRoute = request.nextUrl.pathname.startsWith("/api/");
-
-  if (isLoginPage || isAuthRoute) {
-    // If user is already logged in and tries to access login, redirect to home
-    if (isLoginPage && sessionCookie) {
+  // Public routes - allow without auth
+  if (isPublicRoute(pathname)) {
+    // If user is logged in and tries to access login, redirect to home
+    if (pathname === "/login" && sessionCookie) {
       return NextResponse.redirect(new URL("/", request.url));
     }
     return NextResponse.next();
   }
 
-  // Protect all other routes
-  if (!sessionCookie) {
-    // For API routes, return 401 JSON response instead of redirect
-    if (isApiRoute) {
-      return NextResponse.json(
-        { error: "Unauthorized" },
-        { status: 401 }
-      );
+  // API routes - check session OR API key
+  if (isApiRoute) {
+    if (sessionCookie || hasValidApiKey(request)) {
+      return NextResponse.next();
     }
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Protected page routes - require session
+  if (!sessionCookie) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
