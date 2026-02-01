@@ -127,3 +127,66 @@ export async function getCategories(userId: string): Promise<string[]> {
   const rows = await sql`SELECT DISTINCT category FROM notes WHERE user_id = ${userId} AND category IS NOT NULL ORDER BY category`;
   return rows.map((row) => (row as { category: string }).category);
 }
+
+/**
+ * Update note embedding after enrichment
+ */
+export async function updateNoteEmbedding(
+  noteId: number,
+  embedding: number[]
+): Promise<void> {
+  const embeddingStr = `[${embedding.join(",")}]`;
+  await sql`
+    UPDATE notes
+    SET embedding = ${embeddingStr}::vector, indexed_at = NOW()
+    WHERE id = ${noteId}
+  `;
+}
+
+/**
+ * Get notes updated since a given date
+ */
+export async function getNotesUpdatedSince(
+  userId: string,
+  since: Date
+): Promise<Note[]> {
+  const rows = await sql`
+    SELECT * FROM notes 
+    WHERE user_id = ${userId} AND updated_at > ${since.toISOString()}
+    ORDER BY updated_at DESC
+  `;
+  return rows as Note[];
+}
+
+/**
+ * Get note statistics for a user
+ */
+export async function getNoteStats(userId: string): Promise<{
+  total: number;
+  byCategory: Record<string, number>;
+  withoutCategory: number;
+  withoutTags: number;
+  withEmbeddings: number;
+}> {
+  const [totalResult, categoryResult, noCategoryResult, noTagsResult, embeddingResult] = await Promise.all([
+    sql`SELECT COUNT(*) as count FROM notes WHERE user_id = ${userId}`,
+    sql`SELECT category, COUNT(*) as count FROM notes WHERE user_id = ${userId} AND category IS NOT NULL GROUP BY category`,
+    sql`SELECT COUNT(*) as count FROM notes WHERE user_id = ${userId} AND category IS NULL`,
+    sql`SELECT COUNT(*) as count FROM notes WHERE user_id = ${userId} AND (tags IS NULL OR array_length(tags, 1) IS NULL)`,
+    sql`SELECT COUNT(*) as count FROM notes WHERE user_id = ${userId} AND embedding IS NOT NULL`,
+  ]);
+
+  const byCategory: Record<string, number> = {};
+  for (const row of categoryResult) {
+    const r = row as { category: string; count: string };
+    byCategory[r.category] = parseInt(r.count);
+  }
+
+  return {
+    total: parseInt((totalResult[0] as { count: string }).count),
+    byCategory,
+    withoutCategory: parseInt((noCategoryResult[0] as { count: string }).count),
+    withoutTags: parseInt((noTagsResult[0] as { count: string }).count),
+    withEmbeddings: parseInt((embeddingResult[0] as { count: string }).count),
+  };
+}

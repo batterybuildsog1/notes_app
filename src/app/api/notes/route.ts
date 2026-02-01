@@ -1,11 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getNotes, createNote } from "@/lib/db";
+import { getNotes, createNote, updateNoteEmbedding } from "@/lib/db";
 import { getAuthUserId } from "@/lib/auth";
+import { checkServiceAuth } from "@/lib/service-auth";
 import { checkRateLimit, rateLimitHeaders } from "@/lib/rate-limit";
+import { enrichNote } from "@/lib/enrichment";
+
+async function getUserId(request: NextRequest): Promise<string | null> {
+  // Try session auth first
+  const userId = await getAuthUserId();
+  if (userId) return userId;
+
+  // Fall back to service auth
+  const serviceAuth = checkServiceAuth(request);
+  if (serviceAuth.authenticated) return serviceAuth.userId;
+
+  return null;
+}
 
 export async function GET(request: NextRequest) {
   try {
-    const userId = await getAuthUserId();
+    const userId = await getUserId(request);
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -39,7 +53,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const userId = await getAuthUserId();
+    const userId = await getUserId(request);
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -94,6 +108,26 @@ export async function POST(request: NextRequest) {
       priority: priority?.trim(),
       project: project?.trim(),
     });
+
+    // Enrichment: Generate embedding + tag suggestions (async, non-blocking)
+    // Don't await - let it run in background
+    enrichNote(title, content, tags || [], category || null)
+      .then(async (enrichment) => {
+        if (enrichment.embedding) {
+          await updateNoteEmbedding(note.id, enrichment.embedding);
+          console.log(`[ENRICHMENT] Generated embedding for note ${note.id}`);
+        }
+        if (enrichment.suggestedTags.length > 0) {
+          console.log(`[ENRICHMENT] Suggested tags for note ${note.id}:`, enrichment.suggestedTags);
+          // Tags are just logged for now - could be stored as suggestions
+        }
+        if (enrichment.suggestedCategory) {
+          console.log(`[ENRICHMENT] Suggested category for note ${note.id}:`, enrichment.suggestedCategory);
+        }
+      })
+      .catch((err) => {
+        console.error(`[ENRICHMENT] Failed for note ${note.id}:`, err);
+      });
 
     return NextResponse.json(note, {
       status: 201,

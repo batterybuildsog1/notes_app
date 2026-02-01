@@ -1,13 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getNoteById, updateNote, deleteNote } from "@/lib/db";
+import { getNoteById, updateNote, deleteNote, updateNoteEmbedding } from "@/lib/db";
 import { getAuthUserId } from "@/lib/auth";
+import { checkServiceAuth } from "@/lib/service-auth";
+import { enrichNote } from "@/lib/enrichment";
+
+async function getUserId(request: NextRequest): Promise<string | null> {
+  const userId = await getAuthUserId();
+  if (userId) return userId;
+
+  const serviceAuth = checkServiceAuth(request);
+  if (serviceAuth.authenticated) return serviceAuth.userId;
+
+  return null;
+}
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const userId = await getAuthUserId();
+    const userId = await getUserId(request);
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -39,7 +51,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const userId = await getAuthUserId();
+    const userId = await getUserId(request);
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
@@ -66,6 +78,20 @@ export async function PUT(
       return NextResponse.json({ error: "Note not found" }, { status: 404 });
     }
 
+    // Re-generate embedding if title or content changed
+    if (title || content) {
+      enrichNote(note.title, note.content, note.tags || [], note.category)
+        .then(async (enrichment) => {
+          if (enrichment.embedding) {
+            await updateNoteEmbedding(note.id, enrichment.embedding);
+            console.log(`[ENRICHMENT] Updated embedding for note ${note.id}`);
+          }
+        })
+        .catch((err) => {
+          console.error(`[ENRICHMENT] Failed for note ${note.id}:`, err);
+        });
+    }
+
     return NextResponse.json(note);
   } catch (error) {
     console.error("Error updating note:", error);
@@ -81,7 +107,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const userId = await getAuthUserId();
+    const userId = await getUserId(request);
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
