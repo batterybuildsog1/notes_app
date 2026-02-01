@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { title, content, category, tags, priority, project } = body;
+    const { title, content, category, tags, priority, project, original_created_at, original_updated_at } = body;
 
     // Input validation
     if (!title || typeof title !== "string") {
@@ -107,6 +107,8 @@ export async function POST(request: NextRequest) {
       tags: Array.isArray(tags) ? tags.map((t: string) => t.trim()) : undefined,
       priority: priority?.trim(),
       project: project?.trim(),
+      original_created_at: original_created_at || undefined,
+      original_updated_at: original_updated_at || undefined,
     });
 
     // Enrichment: Generate embedding + tag suggestions (async, non-blocking)

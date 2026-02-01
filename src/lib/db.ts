@@ -12,8 +12,14 @@ export interface Note {
   project: string | null;
   source: string | null;
   user_id: string;
-  created_at: Date;
-  updated_at: Date;
+  created_at: Date;           // System timestamp
+  updated_at: Date;           // System timestamp
+  original_created_at: Date | null;  // From source (Evernote/Notion)
+  original_updated_at: Date | null;  // From source (Evernote/Notion)
+  display_created_at?: Date;  // Computed: COALESCE(original_created_at, created_at)
+  display_updated_at?: Date;  // Computed: COALESCE(original_updated_at, updated_at)
+  notion_page_id?: string | null;
+  notion_last_edited?: Date | null;
 }
 
 export async function getNotes(userId: string, search?: string, category?: string): Promise<Note[]> {
@@ -23,31 +29,51 @@ export async function getNotes(userId: string, search?: string, category?: strin
 
   if (hasSearch && hasCategory) {
     const rows = await sql`
-      SELECT * FROM notes
+      SELECT *,
+        COALESCE(original_created_at, created_at) as display_created_at,
+        COALESCE(original_updated_at, updated_at) as display_updated_at
+      FROM notes
       WHERE user_id = ${userId}
         AND category = ${category}
         AND (title ILIKE ${searchPattern} OR content ILIKE ${searchPattern})
-      ORDER BY updated_at DESC
+      ORDER BY COALESCE(original_updated_at, updated_at) DESC
     `;
     return rows as Note[];
   }
 
   if (hasSearch) {
     const rows = await sql`
-      SELECT * FROM notes
+      SELECT *,
+        COALESCE(original_created_at, created_at) as display_created_at,
+        COALESCE(original_updated_at, updated_at) as display_updated_at
+      FROM notes
       WHERE user_id = ${userId}
         AND (title ILIKE ${searchPattern} OR content ILIKE ${searchPattern})
-      ORDER BY updated_at DESC
+      ORDER BY COALESCE(original_updated_at, updated_at) DESC
     `;
     return rows as Note[];
   }
 
   if (hasCategory) {
-    const rows = await sql`SELECT * FROM notes WHERE user_id = ${userId} AND category = ${category} ORDER BY updated_at DESC`;
+    const rows = await sql`
+      SELECT *,
+        COALESCE(original_created_at, created_at) as display_created_at,
+        COALESCE(original_updated_at, updated_at) as display_updated_at
+      FROM notes 
+      WHERE user_id = ${userId} AND category = ${category} 
+      ORDER BY COALESCE(original_updated_at, updated_at) DESC
+    `;
     return rows as Note[];
   }
 
-  const rows = await sql`SELECT * FROM notes WHERE user_id = ${userId} ORDER BY updated_at DESC`;
+  const rows = await sql`
+    SELECT *,
+      COALESCE(original_created_at, created_at) as display_created_at,
+      COALESCE(original_updated_at, updated_at) as display_updated_at
+    FROM notes 
+    WHERE user_id = ${userId} 
+    ORDER BY COALESCE(original_updated_at, updated_at) DESC
+  `;
   return rows as Note[];
 }
 
@@ -64,11 +90,19 @@ export async function createNote(data: {
   tags?: string[];
   priority?: string;
   project?: string;
+  original_created_at?: string | Date;
+  original_updated_at?: string | Date;
 }): Promise<Note> {
   const tagsArray = data.tags && data.tags.length > 0 ? data.tags : null;
+  const originalCreatedAt = data.original_created_at 
+    ? (typeof data.original_created_at === 'string' ? data.original_created_at : data.original_created_at.toISOString())
+    : null;
+  const originalUpdatedAt = data.original_updated_at
+    ? (typeof data.original_updated_at === 'string' ? data.original_updated_at : data.original_updated_at.toISOString())
+    : null;
 
   const rows = await sql`
-    INSERT INTO notes (title, content, user_id, category, tags, priority, project, created_at, updated_at)
+    INSERT INTO notes (title, content, user_id, category, tags, priority, project, created_at, updated_at, original_created_at, original_updated_at)
     VALUES (
       ${data.title},
       ${data.content},
@@ -78,7 +112,9 @@ export async function createNote(data: {
       ${data.priority || null},
       ${data.project || null},
       NOW(),
-      NOW()
+      NOW(),
+      ${originalCreatedAt},
+      ${originalUpdatedAt}
     )
     RETURNING *
   `;

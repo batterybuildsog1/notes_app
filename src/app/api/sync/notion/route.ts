@@ -236,11 +236,13 @@ async function pullFromNotion(
           // Update existing note if Notion version is newer
           const noteUpdatedAt = new Date(existing.updated_at);
           if (pageEditedAt > noteUpdatedAt) {
+            // Preserve original_created_at, only update original_updated_at
             await sql`
               UPDATE notes 
               SET title = ${title}, 
                   content = ${content},
                   notion_last_edited = ${page.last_edited_time},
+                  original_updated_at = ${page.last_edited_time},
                   updated_at = NOW()
               WHERE id = ${existing.id}
             `;
@@ -261,15 +263,15 @@ async function pullFromNotion(
             }
           }
         } else {
-          // Create new note
+          // Create new note - use Notion's timestamps for original_created_at/original_updated_at
           const rows = await sql`
             INSERT INTO notes (
               title, content, user_id, notion_page_id, notion_last_edited,
-              created_at, updated_at
+              created_at, updated_at, original_created_at, original_updated_at
             )
             VALUES (
               ${title}, ${content}, ${userId}, ${page.id}, ${page.last_edited_time},
-              NOW(), NOW()
+              NOW(), NOW(), ${page.created_time}, ${page.last_edited_time}
             )
             RETURNING id
           `;
