@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  getNotes,
+  getNotesWithEntities,
   getNotesByEntity,
   createNote,
   updateNoteEmbedding,
@@ -51,35 +51,45 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const search = searchParams.get("search") || undefined;
     const category = searchParams.get("category") || undefined;
+    const limit = parseInt(searchParams.get("limit") || "30", 10);
+    const offset = parseInt(searchParams.get("offset") || "0", 10);
 
     // Entity filters
     const personId = searchParams.get("person") || undefined;
     const companyId = searchParams.get("company") || undefined;
     const projectId = searchParams.get("project") || undefined;
 
-    // Get notes - either filtered by entity or by search/category
-    let notes;
+    // Get notes with entities in a single query (no N+1!)
+    let notesWithEntities: NoteWithEntities[];
     if (personId) {
-      notes = await getNotesByEntity(userId, "person", personId);
-    } else if (companyId) {
-      notes = await getNotesByEntity(userId, "company", companyId);
-    } else if (projectId) {
-      notes = await getNotesByEntity(userId, "project", projectId);
-    } else {
-      notes = await getNotes(userId, search, category);
-    }
-
-    // Fetch linked entities for each note
-    const notesWithEntities: NoteWithEntities[] = await Promise.all(
-      notes.map(async (note) => {
-        try {
+      // Entity filters still need the old pattern (less common, fewer results)
+      const notes = await getNotesByEntity(userId, "person", personId);
+      notesWithEntities = await Promise.all(
+        notes.map(async (note) => {
           const entities = await getNoteEntities(note.id);
           return { ...note, ...entities };
-        } catch {
-          return note;
-        }
-      })
-    );
+        })
+      );
+    } else if (companyId) {
+      const notes = await getNotesByEntity(userId, "company", companyId);
+      notesWithEntities = await Promise.all(
+        notes.map(async (note) => {
+          const entities = await getNoteEntities(note.id);
+          return { ...note, ...entities };
+        })
+      );
+    } else if (projectId) {
+      const notes = await getNotesByEntity(userId, "project", projectId);
+      notesWithEntities = await Promise.all(
+        notes.map(async (note) => {
+          const entities = await getNoteEntities(note.id);
+          return { ...note, ...entities };
+        })
+      );
+    } else {
+      // Main path: single query with JOINs
+      notesWithEntities = await getNotesWithEntities(userId, search, category, { limit, offset });
+    }
 
     return NextResponse.json(notesWithEntities, { headers: rateLimitHeaders(rateLimit) });
   } catch (error) {

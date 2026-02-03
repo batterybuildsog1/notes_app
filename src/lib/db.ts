@@ -80,10 +80,17 @@ export interface Note {
   notion_last_edited?: Date | null;
 }
 
-export async function getNotes(userId: string, search?: string, category?: string): Promise<Note[]> {
+export async function getNotes(
+  userId: string,
+  search?: string,
+  category?: string,
+  options?: { limit?: number; offset?: number }
+): Promise<Note[]> {
   const hasSearch = search && search.trim().length > 0;
   const hasCategory = category && category !== "all";
   const searchPattern = hasSearch ? `%${search.trim()}%` : null;
+  const limit = options?.limit ?? 30;
+  const offset = options?.offset ?? 0;
 
   if (hasSearch && hasCategory) {
     const rows = await sql`
@@ -95,6 +102,7 @@ export async function getNotes(userId: string, search?: string, category?: strin
         AND category = ${category}
         AND (title ILIKE ${searchPattern} OR content ILIKE ${searchPattern})
       ORDER BY COALESCE(original_updated_at, updated_at) DESC
+      LIMIT ${limit} OFFSET ${offset}
     `;
     return rows as Note[];
   }
@@ -108,6 +116,7 @@ export async function getNotes(userId: string, search?: string, category?: strin
       WHERE user_id = ${userId}
         AND (title ILIKE ${searchPattern} OR content ILIKE ${searchPattern})
       ORDER BY COALESCE(original_updated_at, updated_at) DESC
+      LIMIT ${limit} OFFSET ${offset}
     `;
     return rows as Note[];
   }
@@ -117,9 +126,10 @@ export async function getNotes(userId: string, search?: string, category?: strin
       SELECT *,
         COALESCE(original_created_at, created_at) as display_created_at,
         COALESCE(original_updated_at, updated_at) as display_updated_at
-      FROM notes 
-      WHERE user_id = ${userId} AND category = ${category} 
+      FROM notes
+      WHERE user_id = ${userId} AND category = ${category}
       ORDER BY COALESCE(original_updated_at, updated_at) DESC
+      LIMIT ${limit} OFFSET ${offset}
     `;
     return rows as Note[];
   }
@@ -128,11 +138,76 @@ export async function getNotes(userId: string, search?: string, category?: strin
     SELECT *,
       COALESCE(original_created_at, created_at) as display_created_at,
       COALESCE(original_updated_at, updated_at) as display_updated_at
-    FROM notes 
-    WHERE user_id = ${userId} 
+    FROM notes
+    WHERE user_id = ${userId}
     ORDER BY COALESCE(original_updated_at, updated_at) DESC
+    LIMIT ${limit} OFFSET ${offset}
   `;
   return rows as Note[];
+}
+
+/**
+ * Get notes with their linked entities in a single query (eliminates N+1)
+ * Uses SQL array aggregation to include people, companies, projects
+ */
+export async function getNotesWithEntities(
+  userId: string,
+  search?: string,
+  category?: string,
+  options?: { limit?: number; offset?: number }
+): Promise<NoteWithEntities[]> {
+  const hasSearch = search && search.trim().length > 0;
+  const hasCategory = category && category !== "all";
+  const searchPattern = hasSearch ? `%${search.trim()}%` : null;
+  const limit = options?.limit ?? 30;
+  const offset = options?.offset ?? 0;
+
+  // Build WHERE clause conditions
+  const conditions = [`n.user_id = '${userId}'`];
+  if (hasCategory) {
+    conditions.push(`n.category = '${category}'`);
+  }
+  if (hasSearch) {
+    conditions.push(`(n.title ILIKE '${searchPattern}' OR n.content ILIKE '${searchPattern}')`);
+  }
+
+  // Use parameterized query with JOINs and array aggregation
+  const rows = await sql`
+    SELECT
+      n.*,
+      COALESCE(n.original_created_at, n.created_at) as display_created_at,
+      COALESCE(n.original_updated_at, n.updated_at) as display_updated_at,
+      COALESCE(
+        json_agg(DISTINCT jsonb_build_object('id', p.id, 'name', p.name))
+        FILTER (WHERE p.id IS NOT NULL),
+        '[]'
+      ) as people,
+      COALESCE(
+        json_agg(DISTINCT jsonb_build_object('id', c.id, 'name', c.name))
+        FILTER (WHERE c.id IS NOT NULL),
+        '[]'
+      ) as companies,
+      COALESCE(
+        json_agg(DISTINCT jsonb_build_object('id', pr.id, 'name', pr.name))
+        FILTER (WHERE pr.id IS NOT NULL),
+        '[]'
+      ) as projects
+    FROM notes n
+    LEFT JOIN note_people np ON np.note_id = n.id
+    LEFT JOIN people p ON p.id = np.person_id
+    LEFT JOIN note_companies nc ON nc.note_id = n.id
+    LEFT JOIN companies c ON c.id = nc.company_id
+    LEFT JOIN note_projects nprj ON nprj.note_id = n.id
+    LEFT JOIN projects pr ON pr.id = nprj.project_id
+    WHERE n.user_id = ${userId}
+      ${hasCategory ? sql`AND n.category = ${category}` : sql``}
+      ${hasSearch ? sql`AND (n.title ILIKE ${searchPattern} OR n.content ILIKE ${searchPattern})` : sql``}
+    GROUP BY n.id
+    ORDER BY COALESCE(n.original_updated_at, n.updated_at) DESC
+    LIMIT ${limit} OFFSET ${offset}
+  `;
+
+  return rows as NoteWithEntities[];
 }
 
 export async function getNoteById(id: string, userId: string): Promise<Note | null> {

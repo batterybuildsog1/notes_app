@@ -1,10 +1,11 @@
 import { redirect } from "next/navigation";
-import { getNotes, getCategories } from "@/lib/db";
+import { getNotesWithEntities, getCategories } from "@/lib/db";
 import { getAuthUserId } from "@/lib/auth";
 import { Header } from "@/components/notes/header";
 import { NotesPageClient } from "@/components/notes/notes-page-client";
 
-export const dynamic = "force-dynamic";
+// ISR: Revalidate every 60 seconds for better performance
+export const revalidate = 60;
 
 export default async function HomePage() {
   const userId = await getAuthUserId();
@@ -13,7 +14,7 @@ export default async function HomePage() {
   }
 
   const [notes, categories] = await Promise.all([
-    getNotes(userId),
+    getNotesWithEntities(userId, undefined, undefined, { limit: 30 }),
     getCategories(userId),
   ]);
 
