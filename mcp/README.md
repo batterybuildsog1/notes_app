@@ -1,16 +1,66 @@
 # Notes App MCP Server
 
-Model Context Protocol tools for Grok to operate the notes-app.
+Model Context Protocol server for AI assistants to operate the notes-app.
 
-## Setup
+## Quick Start
 
-1. Set environment variables:
-   ```bash
-   export NOTES_APP_URL="https://your-app.vercel.app"  # or localhost:3000
-   export NOTES_API_KEY="your-api-key"
-   ```
+### 1. Build the server
 
-2. The API key should match one configured in `SERVICE_API_KEYS` on the server.
+```bash
+cd mcp/server
+npm install
+npm run build
+```
+
+### 2. Configure environment
+
+```bash
+export NOTES_APP_URL="https://your-app.vercel.app"  # or http://localhost:3000
+export NOTES_API_KEY="your-api-key"
+export NOTES_USER_ID="your-user-id"  # optional, defaults to 'mcp-user'
+```
+
+### 3. Add to Claude Desktop
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "notes-app": {
+      "command": "node",
+      "args": ["/path/to/notes-app/mcp/server/dist/index.js"],
+      "env": {
+        "NOTES_APP_URL": "https://your-app.vercel.app",
+        "NOTES_API_KEY": "your-api-key"
+      }
+    }
+  }
+}
+```
+
+### 4. Add to Claude Code
+
+Add to `~/.claude.json`:
+
+```json
+{
+  "mcpServers": {
+    "notes-app": {
+      "command": "node",
+      "args": ["/path/to/notes-app/mcp/server/dist/index.js"],
+      "env": {
+        "NOTES_APP_URL": "https://your-app.vercel.app",
+        "NOTES_API_KEY": "your-api-key"
+      }
+    }
+  }
+}
+```
+
+## Authentication
+
+The server uses service auth - API key should match one configured in `SERVICE_API_KEYS` on the Next.js server.
 
 ## Authentication
 

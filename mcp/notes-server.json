@@ -500,6 +500,195 @@
         "type": "object",
         "properties": {}
       }
+    },
+    {
+      "name": "suggest_projects",
+      "description": "Get project suggestions for a note based on extracted entities, shared entities with other project notes, keyword matching, and semantic similarity.",
+      "endpoint": "/api/notes/{noteId}/suggest-projects",
+      "method": "GET",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "noteId": {
+            "type": "string",
+            "description": "UUID of the note to get project suggestions for"
+          }
+        },
+        "required": ["noteId"]
+      },
+      "example": {
+        "noteId": "550e8400-e29b-41d4-a716-446655440000"
+      }
+    },
+    {
+      "name": "get_usage",
+      "description": "Get token usage statistics for AI enrichment operations. Tracks OpenAI API costs.",
+      "endpoint": "/api/usage",
+      "method": "GET",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "period": {
+            "type": "string",
+            "enum": ["today", "week", "month", "all"],
+            "description": "Time period for usage stats",
+            "default": "today"
+          },
+          "noteId": {
+            "type": "string",
+            "description": "Optional: Get usage for a specific note instead of time period"
+          }
+        }
+      },
+      "example": {
+        "period": "month"
+      }
+    },
+    {
+      "name": "list_templates",
+      "description": "List all note templates for the user. Templates provide default values for creating new notes.",
+      "endpoint": "/api/templates",
+      "method": "GET",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "create_template",
+      "description": "Create a new note template with default title, content, category, and tags. When creating notes with a templateId, these values are used as defaults.",
+      "endpoint": "/api/templates",
+      "method": "POST",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Template name (unique per user, max 100 chars)",
+            "maxLength": 100
+          },
+          "title_template": {
+            "type": "string",
+            "description": "Default title for notes created from this template"
+          },
+          "content_template": {
+            "type": "string",
+            "description": "Default content for notes created from this template"
+          },
+          "default_category": {
+            "type": "string",
+            "description": "Default category for notes created from this template"
+          },
+          "default_tags": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Default tags for notes created from this template"
+          }
+        },
+        "required": ["name"]
+      },
+      "example": {
+        "name": "Meeting Notes",
+        "title_template": "Meeting: ",
+        "content_template": "## Attendees\n\n## Agenda\n\n## Action Items\n",
+        "default_category": "meetings",
+        "default_tags": ["meeting"]
+      }
+    },
+    {
+      "name": "delete_template",
+      "description": "Delete a note template by ID.",
+      "endpoint": "/api/templates",
+      "method": "DELETE",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "UUID of the template to delete"
+          }
+        },
+        "required": ["id"]
+      },
+      "example": {
+        "id": "550e8400-e29b-41d4-a716-446655440000"
+      }
+    },
+    {
+      "name": "create_note_from_template",
+      "description": "Create a new note using a template's defaults. User-provided values override template defaults.",
+      "endpoint": "/api/notes",
+      "method": "POST",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "templateId": {
+            "type": "string",
+            "description": "UUID of the template to use for defaults"
+          },
+          "title": {
+            "type": "string",
+            "description": "Override the template's default title"
+          },
+          "content": {
+            "type": "string",
+            "description": "Override the template's default content"
+          },
+          "category": {
+            "type": "string",
+            "description": "Override the template's default category"
+          },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Override the template's default tags"
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["low", "medium", "high"],
+            "description": "Priority level"
+          },
+          "project": {
+            "type": "string",
+            "description": "Project name this note belongs to"
+          }
+        },
+        "required": ["templateId"]
+      },
+      "example": {
+        "templateId": "550e8400-e29b-41d4-a716-446655440000",
+        "title": "Meeting: Q1 Planning with John"
+      }
+    },
+    {
+      "name": "list_categories",
+      "description": "List all unique categories used across notes. Useful for filtering or suggesting categories.",
+      "endpoint": "/api/categories",
+      "method": "GET",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "get_issues",
+      "description": "Get system issues report: notes without categories/tags/embeddings, stalled enrichment, pending clarifications, duplicate entities. Returns severity-sorted issues for data quality monitoring.",
+      "endpoint": "/api/issues",
+      "method": "GET",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "health_check",
+      "description": "Check API and database health status. Returns app status, database connectivity, and version. Does not require authentication.",
+      "endpoint": "/api/health",
+      "method": "GET",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
     }
   ]
 }
