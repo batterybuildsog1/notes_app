@@ -17,6 +17,7 @@ import {
   type NotionPage,
 } from "@/lib/notion-sync";
 import { generateEmbedding } from "@/lib/enrichment";
+import { enrichWithEntities } from "@/lib/entity-extraction";
 
 const sql = neon(process.env.DATABASE_URL!);
 
@@ -240,8 +241,8 @@ async function pullFromNotion(
           if (pageEditedAt > noteUpdatedAt) {
             // Preserve original_created_at, only update original_updated_at
             await sql`
-              UPDATE notes 
-              SET title = ${title}, 
+              UPDATE notes
+              SET title = ${title},
                   content = ${content},
                   notion_last_edited = ${page.last_edited_time},
                   original_updated_at = ${page.last_edited_time},
@@ -250,9 +251,25 @@ async function pullFromNotion(
             `;
             updated.push(title);
 
-            // Regenerate embedding
+            // Run entity extraction + embedding in parallel
             try {
-              const embedding = await generateEmbedding(`${title}\n\n${content}`);
+              const [enrichment, embedding] = await Promise.all([
+                enrichWithEntities(title, content, existing.tags || []),
+                generateEmbedding(`${title}\n\n${content}`),
+              ]);
+
+              // Apply entity enrichment
+              if (enrichment.tags.length > 0 || enrichment.project) {
+                await sql`
+                  UPDATE notes
+                  SET tags = ${enrichment.tags},
+                      project = COALESCE(${enrichment.project}, project),
+                      enriched_at = NOW()
+                  WHERE id = ${existing.id}
+                `;
+              }
+
+              // Apply embedding
               if (embedding) {
                 const embeddingStr = `[${embedding.join(",")}]`;
                 await sql`
@@ -280,9 +297,25 @@ async function pullFromNotion(
           const noteId = (rows[0] as { id: number }).id;
           created.push(title);
 
-          // Generate embedding
+          // Run entity extraction + embedding in parallel
           try {
-            const embedding = await generateEmbedding(`${title}\n\n${content}`);
+            const [enrichment, embedding] = await Promise.all([
+              enrichWithEntities(title, content, []),
+              generateEmbedding(`${title}\n\n${content}`),
+            ]);
+
+            // Apply entity enrichment (including auto-title if needed)
+            const finalTitle = enrichment.newTitle || title;
+            await sql`
+              UPDATE notes
+              SET title = ${finalTitle},
+                  tags = ${enrichment.tags},
+                  project = ${enrichment.project},
+                  enriched_at = NOW()
+              WHERE id = ${noteId}
+            `;
+
+            // Apply embedding
             if (embedding) {
               const embeddingStr = `[${embedding.join(",")}]`;
               await sql`

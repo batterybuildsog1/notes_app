@@ -17,13 +17,12 @@ export default async function EditNotePage({ params }: PageProps) {
   }
 
   const { id } = await params;
-  const noteId = parseInt(id);
-  if (isNaN(noteId) || noteId <= 0) {
+  if (!id) {
     notFound();
   }
 
   const [note, categories] = await Promise.all([
-    getNoteById(noteId, userId),
+    getNoteById(id, userId),
     getCategories(userId),
   ]);
 

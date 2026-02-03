@@ -35,12 +35,11 @@ export default async function NotePage({ params }: PageProps) {
   }
 
   const { id } = await params;
-  const noteId = parseInt(id);
-  if (isNaN(noteId) || noteId <= 0) {
+  if (!id) {
     notFound();
   }
 
-  const note = await getNoteById(noteId, userId);
+  const note = await getNoteById(id, userId);
 
   if (!note) {
     notFound();

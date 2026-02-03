@@ -30,7 +30,7 @@ export async function GET(request: NextRequest) {
     const stats = await getNoteStats(userId);
 
     // If since param provided, also get recently updated notes
-    let recentNotes: { id: number; title: string; updated_at: Date }[] = [];
+    let recentNotes: { id: string; title: string; updated_at: Date }[] = [];
     if (sinceParam) {
       const sinceDate = new Date(sinceParam);
       if (!isNaN(sinceDate.getTime())) {

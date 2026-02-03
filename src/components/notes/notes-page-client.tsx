@@ -2,7 +2,6 @@
 
 import { useState, useMemo, useCallback } from "react";
 import { SearchBar } from "./search-bar";
-import { CategoryFilter } from "./category-filter";
 import { NoteList } from "./note-list";
 import { QuickAddDialog } from "./quick-add-dialog";
 import { searchNotes } from "@/lib/search";
@@ -13,43 +12,24 @@ interface NotesPageClientProps {
   categories: string[];
 }
 
-export function NotesPageClient({ initialNotes, categories }: NotesPageClientProps) {
+export function NotesPageClient({ initialNotes, categories: _categories }: NotesPageClientProps) {
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("all");
 
   const handleSearch = useCallback((query: string) => {
     setSearchQuery(query);
   }, []);
 
-  const handleCategorySelect = useCallback((category: string) => {
-    setSelectedCategory(category);
-  }, []);
-
   const filteredNotes = useMemo(() => {
-    let notes = initialNotes;
-
-    // Filter by category
-    if (selectedCategory !== "all") {
-      notes = notes.filter((note) => note.category === selectedCategory);
+    if (!searchQuery) {
+      return initialNotes;
     }
-
-    // Apply fuzzy search
-    if (searchQuery) {
-      notes = searchNotes(notes, searchQuery);
-    }
-
-    return notes;
-  }, [initialNotes, searchQuery, selectedCategory]);
+    return searchNotes(initialNotes, searchQuery);
+  }, [initialNotes, searchQuery]);
 
   return (
     <>
-      <div className="space-y-4 mb-6">
+      <div className="mb-4 md:mb-6">
         <SearchBar onSearch={handleSearch} />
-        <CategoryFilter
-          categories={categories}
-          selected={selectedCategory}
-          onSelect={handleCategorySelect}
-        />
       </div>
 
       <NoteList notes={filteredNotes} />

@@ -13,12 +13,26 @@ const fuseOptions = {
   ignoreLocation: true,
 };
 
+// Cache Fuse instance to avoid recreation on every search
+let cachedFuse: Fuse<Note> | null = null;
+let cachedNotesRef: Note[] | null = null;
+
+function getFuseInstance(notes: Note[]): Fuse<Note> {
+  // Only recreate if notes array reference changed
+  if (cachedFuse && cachedNotesRef === notes) {
+    return cachedFuse;
+  }
+  cachedFuse = new Fuse(notes, fuseOptions);
+  cachedNotesRef = notes;
+  return cachedFuse;
+}
+
 export function searchNotes(notes: Note[], query: string): Note[] {
   if (!query || query.trim() === "") {
     return notes;
   }
 
-  const fuse = new Fuse(notes, fuseOptions);
+  const fuse = getFuseInstance(notes);
   const results = fuse.search(query);
   return results.map((result) => result.item);
 }

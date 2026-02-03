@@ -20,7 +20,7 @@ export default async function HomePage() {
   return (
     <div className="min-h-screen bg-background">
       <Header />
-      <main className="container py-6 px-4">
+      <main className="container py-4 px-3 md:py-6 md:px-4">
         <NotesPageClient initialNotes={notes} categories={categories} />
       </main>
     </div>

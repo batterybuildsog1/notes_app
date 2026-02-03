@@ -15,7 +15,7 @@ import {
 import { Trash2 } from "lucide-react";
 
 interface DeleteNoteButtonProps {
-  noteId: number;
+  noteId: string;
 }
 
 export function DeleteNoteButton({ noteId }: DeleteNoteButtonProps) {

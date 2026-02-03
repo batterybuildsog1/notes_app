@@ -909,3 +909,119 @@ export async function getNoteEmbedding(
 
   return match[1].split(",").map((v: string) => parseFloat(v.trim()));
 }
+
+// ============================================================================
+// Note Template Functions
+// ============================================================================
+
+export interface NoteTemplate {
+  id: string;
+  user_id: string;
+  name: string;
+  title_template: string | null;
+  content_template: string | null;
+  default_category: string | null;
+  default_tags: string[] | null;
+  created_at: Date;
+}
+
+/**
+ * Get all templates for a user
+ */
+export async function getTemplates(userId: string): Promise<NoteTemplate[]> {
+  const rows = await sql`
+    SELECT * FROM note_templates
+    WHERE user_id = ${userId}
+    ORDER BY name
+  `;
+  return rows as NoteTemplate[];
+}
+
+/**
+ * Get a single template by ID
+ */
+export async function getTemplateById(
+  id: string,
+  userId: string
+): Promise<NoteTemplate | null> {
+  const rows = await sql`
+    SELECT * FROM note_templates
+    WHERE id = ${id} AND user_id = ${userId}
+  `;
+  return rows[0] as NoteTemplate | null;
+}
+
+/**
+ * Create a new template
+ */
+export async function createTemplate(data: {
+  user_id: string;
+  name: string;
+  title_template?: string;
+  content_template?: string;
+  default_category?: string;
+  default_tags?: string[];
+}): Promise<NoteTemplate> {
+  const tagsArray = data.default_tags && data.default_tags.length > 0 ? data.default_tags : null;
+
+  const rows = await sql`
+    INSERT INTO note_templates (user_id, name, title_template, content_template, default_category, default_tags)
+    VALUES (
+      ${data.user_id},
+      ${data.name},
+      ${data.title_template || null},
+      ${data.content_template || null},
+      ${data.default_category || null},
+      ${tagsArray}
+    )
+    RETURNING *
+  `;
+  return rows[0] as NoteTemplate;
+}
+
+/**
+ * Update a template
+ */
+export async function updateTemplate(
+  id: string,
+  userId: string,
+  data: {
+    name?: string;
+    title_template?: string;
+    content_template?: string;
+    default_category?: string;
+    default_tags?: string[];
+  }
+): Promise<NoteTemplate | null> {
+  const existing = await getTemplateById(id, userId);
+  if (!existing) return null;
+
+  const tagsArray = data.default_tags !== undefined
+    ? (data.default_tags && data.default_tags.length > 0 ? data.default_tags : null)
+    : existing.default_tags;
+
+  const rows = await sql`
+    UPDATE note_templates
+    SET
+      name = ${data.name ?? existing.name},
+      title_template = ${data.title_template ?? existing.title_template},
+      content_template = ${data.content_template ?? existing.content_template},
+      default_category = ${data.default_category ?? existing.default_category},
+      default_tags = ${tagsArray}
+    WHERE id = ${id} AND user_id = ${userId}
+    RETURNING *
+  `;
+  return rows[0] as NoteTemplate | null;
+}
+
+/**
+ * Delete a template
+ */
+export async function deleteTemplate(id: string, userId: string): Promise<boolean> {
+  const rows = await sql`
+    DELETE FROM note_templates
+    WHERE id = ${id} AND user_id = ${userId}
+    RETURNING id
+  `;
+  return rows.length > 0;
+}

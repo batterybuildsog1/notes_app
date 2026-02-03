@@ -37,8 +37,8 @@ export function Header() {
 
   return (
     <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="container flex h-14 items-center justify-between px-4">
-        <a href="/" className="text-xl font-bold">
+      <div className="container flex h-12 md:h-14 items-center justify-between px-3 md:px-4">
+        <a href="/" className="text-lg md:text-xl font-bold">
           Notes
         </a>
 

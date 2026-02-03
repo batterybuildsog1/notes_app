@@ -9,6 +9,7 @@ import {
   updateClarificationTelegramId,
   getNoteEntities,
   NoteWithEntities,
+  getTemplateById,
 } from "@/lib/db";
 import { getAuthUserId } from "@/lib/auth";
 import { checkServiceAuth } from "@/lib/service-auth";
@@ -117,7 +118,24 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { title, content, category, tags, priority, project, original_created_at, original_updated_at } = body;
+    let { title, content, category, tags, priority, project, original_created_at, original_updated_at, templateId } = body;
+
+    // If templateId provided, load template and use as defaults
+    if (templateId) {
+      const template = await getTemplateById(templateId, userId);
+      if (!template) {
+        return NextResponse.json(
+          { error: "Template not found" },
+          { status: 404 }
+        );
+      }
+
+      // Use template values as defaults, user-provided values override
+      title = title || template.title_template;
+      content = content || template.content_template;
+      category = category || template.default_category;
+      tags = tags || template.default_tags;
+    }
 
     // Input validation
     if (!title || typeof title !== "string") {
