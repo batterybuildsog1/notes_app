@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getNoteById, updateNote, deleteNote, updateNoteEmbedding } from "@/lib/db";
+import { getNoteById, updateNote, deleteNote, updateNoteEmbedding, getNoteEntities } from "@/lib/db";
 import { getAuthUserId } from "@/lib/auth";
 import { checkServiceAuth } from "@/lib/service-auth";
 import { enrichNote } from "@/lib/enrichment";
+import { enrichWithEntities, linkEntitiesToNote, LinkedEntities } from "@/lib/entity-extraction";
 
 async function getUserId(request: NextRequest): Promise<string | null> {
   const userId = await getAuthUserId();
@@ -25,18 +26,20 @@ export async function GET(
     }
 
     const { id } = await params;
-    const noteId = parseInt(id);
-    if (isNaN(noteId) || noteId <= 0) {
+    if (!id || typeof id !== "string") {
       return NextResponse.json({ error: "Invalid note ID" }, { status: 400 });
     }
 
-    const note = await getNoteById(noteId, userId);
+    const note = await getNoteById(id, userId);
 
     if (!note) {
       return NextResponse.json({ error: "Note not found" }, { status: 404 });
     }
 
-    return NextResponse.json(note);
+    // Include linked entities
+    const entities = await getNoteEntities(id);
+
+    return NextResponse.json({ ...note, ...entities });
   } catch (error) {
     console.error("Error fetching note:", error);
     return NextResponse.json(
@@ -57,15 +60,14 @@ export async function PUT(
     }
 
     const { id } = await params;
-    const noteId = parseInt(id);
-    if (isNaN(noteId) || noteId <= 0) {
+    if (!id || typeof id !== "string") {
       return NextResponse.json({ error: "Invalid note ID" }, { status: 400 });
     }
 
     const body = await request.json();
     const { title, content, category, tags, priority, project } = body;
 
-    const note = await updateNote(noteId, userId, {
+    const note = await updateNote(id, userId, {
       title,
       content,
       category,
@@ -78,21 +80,40 @@ export async function PUT(
       return NextResponse.json({ error: "Note not found" }, { status: 404 });
     }
 
-    // Re-generate embedding if title or content changed
+    // Re-enrich if title or content changed
+    let linkedEntities: LinkedEntities = { people: [], companies: [], projects: [] };
     if (title || content) {
-      enrichNote(note.title, note.content, note.tags || [], note.category)
-        .then(async (enrichment) => {
-          if (enrichment.embedding) {
-            await updateNoteEmbedding(note.id, enrichment.embedding);
-            console.log(`[ENRICHMENT] Updated embedding for note ${note.id}`);
-          }
-        })
-        .catch((err) => {
-          console.error(`[ENRICHMENT] Failed for note ${note.id}:`, err);
-        });
+      try {
+        // Run entity extraction + embedding
+        const [entityEnrichment, enrichment] = await Promise.all([
+          enrichWithEntities(note.title, note.content, note.tags || []),
+          enrichNote(note.title, note.content, note.tags || [], note.category),
+        ]);
+
+        // Link new entities (existing links preserved via ON CONFLICT DO NOTHING)
+        if (entityEnrichment.entities) {
+          linkedEntities = await linkEntitiesToNote(note.id, userId, entityEnrichment.entities);
+        }
+
+        if (enrichment.embedding) {
+          await updateNoteEmbedding(note.id, enrichment.embedding);
+          console.log(`[ENRICHMENT] Updated embedding for note ${note.id}`);
+        }
+      } catch (err) {
+        console.error(`[ENRICHMENT] Failed for note ${note.id}:`, err);
+      }
+    } else {
+      // Fetch existing entities if no content change
+      const entities = await getNoteEntities(id);
+      linkedEntities = entities;
     }
 
-    return NextResponse.json(note);
+    return NextResponse.json({
+      ...note,
+      people: linkedEntities.people,
+      companies: linkedEntities.companies,
+      projects: linkedEntities.projects,
+    });
   } catch (error) {
     console.error("Error updating note:", error);
     return NextResponse.json(
@@ -113,12 +134,11 @@ export async function DELETE(
     }
 
     const { id } = await params;
-    const noteId = parseInt(id);
-    if (isNaN(noteId) || noteId <= 0) {
+    if (!id || typeof id !== "string") {
       return NextResponse.json({ error: "Invalid note ID" }, { status: 400 });
     }
 
-    await deleteNote(noteId, userId);
+    await deleteNote(id, userId);
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("Error deleting note:", error);

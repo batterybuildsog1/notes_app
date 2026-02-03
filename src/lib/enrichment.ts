@@ -1,13 +1,19 @@
 /**
  * Note Enrichment - OpenAI Embeddings + Grok Tag Suggestions
- * 
+ *
  * Called on note create/update to:
  * 1. Generate embeddings via OpenAI text-embedding-3-small
  * 2. Get tag suggestions via Grok API
  */
 
+import { trackTokenUsage, estimateTokens } from "./token-tracking";
+
 const OPENAI_API_URL = "https://api.openai.com/v1/embeddings";
 const GROK_API_URL = "https://api.x.ai/v1/chat/completions";
+
+// Model constants for token tracking
+const GROK_MODEL = "grok-4-1-fast-reasoning";
+const EMBEDDING_MODEL = "text-embedding-3-small";
 
 /**
  * Generate embedding for note content using OpenAI
@@ -42,6 +48,17 @@ export async function generateEmbedding(text: string): Promise<number[] | null> 
     }
 
     const data = await response.json();
+
+    // Track token usage for embeddings
+    const inputTokens = data.usage?.prompt_tokens || estimateTokens(truncatedText);
+    await trackTokenUsage({
+      model: EMBEDDING_MODEL,
+      operation: "embed",
+      inputTokens,
+      outputTokens: 0, // Embeddings don't have output tokens
+      metadata: { textLength: truncatedText.length },
+    });
+
     return data.data[0].embedding;
   } catch (error) {
     console.error("[ENRICHMENT] Embedding generation failed:", error);
@@ -87,7 +104,7 @@ JSON array only:`;
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "grok-2-latest",
+        model: "grok-4-1-fast-reasoning",
         messages: [{ role: "user", content: prompt }],
         temperature: 0.3,
       }),
@@ -101,7 +118,18 @@ JSON array only:`;
 
     const data = await response.json();
     const responseText = data.choices[0]?.message?.content || "[]";
-    
+
+    // Track token usage for tag suggestions
+    const inputTokens = data.usage?.prompt_tokens || estimateTokens(prompt);
+    const outputTokens = data.usage?.completion_tokens || estimateTokens(responseText);
+    await trackTokenUsage({
+      model: GROK_MODEL,
+      operation: "suggest-tags",
+      inputTokens,
+      outputTokens,
+      metadata: { existingTagsCount: existingTags.length },
+    });
+
     // Parse JSON array from response (handle multiline with replace)
     const cleanedResponse = responseText.replace(/\n/g, " ");
     const match = cleanedResponse.match(/\[.*\]/);
@@ -109,7 +137,7 @@ JSON array only:`;
       const tags = JSON.parse(match[0]);
       return Array.isArray(tags) ? tags.filter((t: unknown) => typeof t === "string") : [];
     }
-    
+
     return [];
   } catch (error) {
     console.error("[ENRICHMENT] Tag suggestion failed:", error);
@@ -142,7 +170,7 @@ Respond with ONLY the category name, nothing else:`;
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "grok-2-latest",
+        model: "grok-4-1-fast-reasoning",
         messages: [{ role: "user", content: prompt }],
         temperature: 0.1,
       }),
@@ -152,11 +180,199 @@ Respond with ONLY the category name, nothing else:`;
 
     const data = await response.json();
     const category = data.choices[0]?.message?.content?.trim();
-    
+
+    // Track token usage for category suggestion
+    const inputTokens = data.usage?.prompt_tokens || estimateTokens(prompt);
+    const outputTokens = data.usage?.completion_tokens || estimateTokens(category || "");
+    await trackTokenUsage({
+      model: GROK_MODEL,
+      operation: "suggest-category",
+      inputTokens,
+      outputTokens,
+    });
+
     const validCategories = ["Work", "Personal", "Ideas", "Reference", "Archive", "Solar", "Real-Estate", "Finance", "Family"];
     return validCategories.includes(category) ? category : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Assess if a note is clear enough for automatic classification
+ * Returns a question to ask if clarification is needed
+ */
+export async function assessNoteClarity(
+  title: string,
+  content: string
+): Promise<{
+  needsClarification: boolean;
+  question: string | null;
+  confidence: number;
+}> {
+  const apiKey = process.env.XAI_API_KEY;
+  if (!apiKey) {
+    return { needsClarification: false, question: null, confidence: 1 };
+  }
+
+  try {
+    const prompt = `Analyze this note and determine if it's clear enough to classify and enrich automatically.
+
+Title: ${title}
+Content: ${content.slice(0, 1500)}
+
+Consider these vagueness indicators:
+1. Is the topic/subject clear?
+2. Is there enough context to determine what this relates to?
+3. Are there ambiguous acronyms or references without context?
+4. **Vague pronouns**: Does it say "he", "she", "they", "him", "her" without naming who?
+5. **Vague property references**: Does it say "the property", "the house", "the unit" without an address?
+6. **Vague company references**: Does it say "the bank", "the lender", "the contractor" without naming them?
+7. **Vague project references**: Does it say "the deal", "the project" without specifying which one?
+
+Respond in this exact JSON format:
+{
+  "needsClarification": true/false,
+  "confidence": 0.0-1.0,
+  "question": "A specific question to ask the user for context" or null
+}
+
+Rules:
+- Set needsClarification=true if the note uses vague pronouns or references that make it hard to link to specific people, companies, or projects
+- The question should ask for the specific missing information (e.g., "Who is 'he' referring to?" or "Which property is this about?")
+- Short notes are fine if the entities are clearly named
+- Only ask ONE focused question about the most important missing context`;
+
+    const response = await fetch(GROK_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "grok-4-1-fast-reasoning",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.2,
+      }),
+    });
+
+    if (!response.ok) {
+      return { needsClarification: false, question: null, confidence: 1 };
+    }
+
+    const data = await response.json();
+    const responseText = data.choices[0]?.message?.content || "";
+
+    // Track token usage for clarity assessment
+    const inputTokens = data.usage?.prompt_tokens || estimateTokens(prompt);
+    const outputTokens = data.usage?.completion_tokens || estimateTokens(responseText);
+    await trackTokenUsage({
+      model: GROK_MODEL,
+      operation: "assess-clarity",
+      inputTokens,
+      outputTokens,
+    });
+
+    // Extract JSON from response
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      return {
+        needsClarification: Boolean(parsed.needsClarification),
+        question: parsed.question || null,
+        confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0.5,
+      };
+    }
+
+    return { needsClarification: false, question: null, confidence: 1 };
+  } catch (error) {
+    console.error("[ENRICHMENT] Clarity assessment failed:", error);
+    return { needsClarification: false, question: null, confidence: 1 };
+  }
+}
+
+/**
+ * Classify note with user-provided context
+ */
+export async function classifyWithContext(
+  title: string,
+  content: string,
+  userContext: string,
+  existingTags: string[] = []
+): Promise<{
+  suggestedTags: string[];
+  suggestedCategory: string | null;
+}> {
+  const apiKey = process.env.XAI_API_KEY;
+  if (!apiKey) {
+    return { suggestedTags: [], suggestedCategory: null };
+  }
+
+  try {
+    const prompt = `Classify this note based on the content and user-provided context.
+
+Title: ${title}
+Content: ${content.slice(0, 1500)}
+
+User's additional context: ${userContext}
+
+Existing tags to avoid duplicating: ${existingTags.join(", ") || "none"}
+
+Respond in this exact JSON format:
+{
+  "tags": ["tag1", "tag2"],
+  "category": "Work|Personal|Ideas|Reference|Archive|Solar|Real-Estate|Finance|Family"
+}
+
+Rules:
+- Tags should be 1-2 words, lowercase, no spaces (use hyphens)
+- 2-4 tags max
+- Category must be one of the exact options listed`;
+
+    const response = await fetch(GROK_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "grok-4-1-fast-reasoning",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.2,
+      }),
+    });
+
+    if (!response.ok) {
+      return { suggestedTags: [], suggestedCategory: null };
+    }
+
+    const data = await response.json();
+    const responseText = data.choices[0]?.message?.content || "";
+
+    // Track token usage for context classification
+    const inputTokens = data.usage?.prompt_tokens || estimateTokens(prompt);
+    const outputTokens = data.usage?.completion_tokens || estimateTokens(responseText);
+    await trackTokenUsage({
+      model: GROK_MODEL,
+      operation: "classify-with-context",
+      inputTokens,
+      outputTokens,
+    });
+
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      const validCategories = ["Work", "Personal", "Ideas", "Reference", "Archive", "Solar", "Real-Estate", "Finance", "Family"];
+      return {
+        suggestedTags: Array.isArray(parsed.tags) ? parsed.tags.filter((t: unknown) => typeof t === "string") : [],
+        suggestedCategory: validCategories.includes(parsed.category) ? parsed.category : null,
+      };
+    }
+
+    return { suggestedTags: [], suggestedCategory: null };
+  } catch (error) {
+    console.error("[ENRICHMENT] Context classification failed:", error);
+    return { suggestedTags: [], suggestedCategory: null };
   }
 }
 

@@ -3,6 +3,14 @@
     {
       "path": "/api/cron/sync",
       "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/enrich",
+      "schedule": "0 7 * * *"
+    },
+    {
+      "path": "/api/cron/telegram-poll",
+      "schedule": "*/5 * * * *"
     }
   ]
 }
