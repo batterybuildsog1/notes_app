@@ -11,6 +11,10 @@
     {
       "path": "/api/cron/telegram-poll",
       "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/cron/enrich-batch",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

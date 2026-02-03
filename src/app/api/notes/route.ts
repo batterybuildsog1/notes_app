@@ -3,25 +3,18 @@ import {
   getNotes,
   getNotesByEntity,
   createNote,
-  updateNote,
   updateNoteEmbedding,
   createClarification,
   updateClarificationTelegramId,
   getNoteEntities,
   NoteWithEntities,
   getTemplateById,
+  queueForEnrichment,
 } from "@/lib/db";
 import { getAuthUserId } from "@/lib/auth";
 import { checkServiceAuth } from "@/lib/service-auth";
 import { checkRateLimit, rateLimitHeaders } from "@/lib/rate-limit";
 import { generateEmbedding, assessNoteClarity } from "@/lib/enrichment";
-import {
-  enrichWithEntities,
-  linkEntitiesToNote,
-  LinkedEntities,
-  suggestProjectsForNote,
-  ProjectSuggestionResult,
-} from "@/lib/entity-extraction";
 import { sendTelegramMessage, isTelegramConfigured } from "@/lib/telegram";
 
 async function getUserId(request: NextRequest): Promise<string | null> {
@@ -175,8 +168,9 @@ export async function POST(request: NextRequest) {
       original_updated_at: original_updated_at || undefined,
     });
 
-    // Step 1: Assess vagueness BEFORE full enrichment
-    let enrichmentStatus = "completed";
+    // Step 1: Assess vagueness BEFORE queueing
+    // Clarity check stays immediate so Telegram questions go out fast
+    let enrichmentStatus: "queued" | "pending_clarification" = "queued";
     try {
       const clarity = await assessNoteClarity(title, content);
 
@@ -203,7 +197,7 @@ export async function POST(request: NextRequest) {
           await updateNoteEmbedding(note.id, embedding);
         }
 
-        // Return early - skip full enrichment until user responds
+        // Return early - skip queueing until user responds
         return NextResponse.json(
           { ...note, enrichment_status: enrichmentStatus },
           { status: 201, headers: rateLimitHeaders(rateLimit) }
@@ -211,104 +205,23 @@ export async function POST(request: NextRequest) {
       }
     } catch (err) {
       console.warn(`[ENRICHMENT] Vagueness check failed for note ${note.id}:`, err);
-      // Continue with full enrichment if vagueness check fails
+      // Continue with queueing if vagueness check fails
     }
 
-    // Step 2: Full enrichment for clear notes
-    let enrichedNote = note;
-    let linkedEntities: LinkedEntities = { people: [], companies: [], projects: [] };
-    let projectSuggestions: ProjectSuggestionResult = {
-      suggestions: [],
-      shouldCreateNew: false,
-      suggestedNewName: null,
-    };
-
+    // Step 2: Queue clear notes for batch entity extraction
+    // This reduces Grok API costs by ~50% through batching
     try {
-      // Run entity extraction + embedding in parallel
-      const [enrichment, embedding] = await Promise.all([
-        enrichWithEntities(title, content, tags || []),
-        generateEmbedding(`${title}\n\n${content}`),
-      ]);
-
-      console.log(`[ENRICHMENT] Entities for note ${note.id}:`, enrichment);
-
-      // Build updates
-      const updates: { tags?: string[]; project?: string; title?: string } = {};
-
-      // Apply entity tags
-      if (enrichment.tags.length > (tags?.length || 0)) {
-        updates.tags = enrichment.tags;
-      }
-
-      // Apply project if found
-      if (enrichment.project && !project) {
-        updates.project = enrichment.project;
-      }
-
-      // Apply auto-title if needed
-      if (enrichment.newTitle) {
-        const isUntitled = !title ||
-          title.toLowerCase() === "untitled" ||
-          title.trim().length < 3;
-        if (isUntitled) {
-          updates.title = enrichment.newTitle;
-        }
-      }
-
-      // Update note with enrichment
-      if (Object.keys(updates).length > 0) {
-        const updated = await updateNote(note.id, userId, updates);
-        if (updated) {
-          enrichedNote = updated;
-        }
-        console.log(`[ENRICHMENT] Applied to note ${note.id}:`, updates);
-      }
-
-      // Link entities to note (CRM-style)
-      if (enrichment.entities) {
-        linkedEntities = await linkEntitiesToNote(note.id, userId, enrichment.entities);
-      }
-
-      // Mark as enriched + store embedding
-      const { neon } = await import("@neondatabase/serverless");
-      const sql = neon(process.env.DATABASE_URL!);
-      await sql`UPDATE notes SET enriched_at = NOW() WHERE id = ${note.id}`;
-
-      if (embedding) {
-        await updateNoteEmbedding(note.id, embedding);
-        console.log(`[ENRICHMENT] Embedding generated for note ${note.id}`);
-      }
-
-      // Get project suggestions based on enrichment
-      try {
-        projectSuggestions = await suggestProjectsForNote(
-          note.id,
-          userId,
-          enrichedNote.title,
-          enrichedNote.content,
-          enrichment.entities
-        );
-        console.log(
-          `[ENRICHMENT] Project suggestions for note ${note.id}:`,
-          projectSuggestions.suggestions.length,
-          "suggestions"
-        );
-      } catch (suggestErr) {
-        console.warn(`[ENRICHMENT] Project suggestion failed for note ${note.id}:`, suggestErr);
-      }
+      await queueForEnrichment(note.id, userId);
+      console.log(`[ENRICHMENT] Note ${note.id} queued for batch enrichment`);
     } catch (err) {
-      console.error(`[ENRICHMENT] Failed for note ${note.id}:`, err);
-      // Continue - return the note even if enrichment failed
+      console.error(`[ENRICHMENT] Failed to queue note ${note.id}:`, err);
+      // Continue - return the note even if queueing failed
     }
 
     return NextResponse.json(
       {
-        ...enrichedNote,
-        people: linkedEntities.people,
-        companies: linkedEntities.companies,
-        projects: linkedEntities.projects,
+        ...note,
         enrichment_status: enrichmentStatus,
-        project_suggestions: projectSuggestions,
       },
       { status: 201, headers: rateLimitHeaders(rateLimit) }
     );

@@ -1025,3 +1025,203 @@ export async function deleteTemplate(id: string, userId: string): Promise<boolea
   `;
   return rows.length > 0;
 }
+
+// ============================================================================
+// Enrichment Queue Functions - Batch Processing
+// ============================================================================
+
+export interface EnrichmentQueueItem {
+  id: string;
+  note_id: string;
+  user_id: string;
+  status: "pending" | "processing" | "completed" | "failed";
+  priority: number;
+  created_at: Date;
+  started_at: Date | null;
+  completed_at: Date | null;
+  error: string | null;
+  attempts: number;
+}
+
+export interface QueuedNoteForProcessing {
+  queueId: string;
+  noteId: string;
+  userId: string;
+  title: string;
+  content: string;
+  tags: string[] | null;
+}
+
+/**
+ * Add a note to the enrichment queue
+ * Uses ON CONFLICT to avoid duplicates
+ */
+export async function queueForEnrichment(
+  noteId: string,
+  userId: string,
+  priority: number = 0
+): Promise<EnrichmentQueueItem> {
+  const rows = await sql`
+    INSERT INTO enrichment_queue (note_id, user_id, priority)
+    VALUES (${noteId}, ${userId}, ${priority})
+    ON CONFLICT (note_id) DO UPDATE
+    SET priority = GREATEST(enrichment_queue.priority, EXCLUDED.priority),
+        status = CASE WHEN enrichment_queue.status = 'failed' THEN 'pending' ELSE enrichment_queue.status END
+    RETURNING *
+  `;
+  return rows[0] as EnrichmentQueueItem;
+}
+
+/**
+ * Claim a batch of notes for processing
+ * Uses FOR UPDATE SKIP LOCKED for safe concurrent access
+ */
+export async function claimEnrichmentBatch(
+  batchSize: number = 15
+): Promise<QueuedNoteForProcessing[]> {
+  // First claim the queue items
+  const claimedRows = await sql`
+    UPDATE enrichment_queue
+    SET status = 'processing',
+        started_at = NOW(),
+        attempts = attempts + 1
+    WHERE id IN (
+      SELECT id FROM enrichment_queue
+      WHERE status = 'pending'
+      ORDER BY priority DESC, created_at ASC
+      LIMIT ${batchSize}
+      FOR UPDATE SKIP LOCKED
+    )
+    RETURNING id, note_id, user_id
+  `;
+
+  if (claimedRows.length === 0) {
+    return [];
+  }
+
+  // Get note details for claimed items
+  const noteIds = claimedRows.map((r) => (r as { note_id: string }).note_id);
+  const notesRows = await sql`
+    SELECT id, title, content, tags, user_id
+    FROM notes
+    WHERE id = ANY(${noteIds})
+  `;
+
+  // Map queue items to notes
+  const notesMap = new Map(
+    notesRows.map((n) => [(n as { id: string }).id, n])
+  );
+
+  return claimedRows.map((q) => {
+    const queueItem = q as { id: string; note_id: string; user_id: string };
+    const note = notesMap.get(queueItem.note_id) as {
+      id: string;
+      title: string;
+      content: string;
+      tags: string[] | null;
+      user_id: string;
+    } | undefined;
+
+    return {
+      queueId: queueItem.id,
+      noteId: queueItem.note_id,
+      userId: queueItem.user_id,
+      title: note?.title || "",
+      content: note?.content || "",
+      tags: note?.tags || null,
+    };
+  });
+}
+
+/**
+ * Mark queue items as completed
+ */
+export async function completeQueueItems(queueIds: string[]): Promise<void> {
+  if (queueIds.length === 0) return;
+
+  await sql`
+    UPDATE enrichment_queue
+    SET status = 'completed',
+        completed_at = NOW(),
+        error = NULL
+    WHERE id = ANY(${queueIds})
+  `;
+}
+
+/**
+ * Mark a queue item as failed with error
+ */
+export async function failQueueItem(
+  queueId: string,
+  error: string
+): Promise<void> {
+  await sql`
+    UPDATE enrichment_queue
+    SET status = 'failed',
+        error = ${error}
+    WHERE id = ${queueId}
+  `;
+}
+
+/**
+ * Get queue status for a note
+ */
+export async function getEnrichmentQueueStatus(
+  noteId: string
+): Promise<EnrichmentQueueItem | null> {
+  const rows = await sql`
+    SELECT * FROM enrichment_queue
+    WHERE note_id = ${noteId}
+    ORDER BY created_at DESC
+    LIMIT 1
+  `;
+  return (rows[0] as EnrichmentQueueItem) || null;
+}
+
+/**
+ * Get queue statistics
+ */
+export async function getQueueStats(): Promise<{
+  pending: number;
+  processing: number;
+  completed: number;
+  failed: number;
+}> {
+  const rows = await sql`
+    SELECT
+      COUNT(*) FILTER (WHERE status = 'pending') as pending,
+      COUNT(*) FILTER (WHERE status = 'processing') as processing,
+      COUNT(*) FILTER (WHERE status = 'completed') as completed,
+      COUNT(*) FILTER (WHERE status = 'failed') as failed
+    FROM enrichment_queue
+  `;
+
+  const result = rows[0] as {
+    pending: string;
+    processing: string;
+    completed: string;
+    failed: string;
+  };
+
+  return {
+    pending: parseInt(result.pending || "0"),
+    processing: parseInt(result.processing || "0"),
+    completed: parseInt(result.completed || "0"),
+    failed: parseInt(result.failed || "0"),
+  };
+}
+
+/**
+ * Reset stale processing items (stuck for more than 10 minutes)
+ */
+export async function resetStaleQueueItems(): Promise<number> {
+  const result = await sql`
+    UPDATE enrichment_queue
+    SET status = 'pending',
+        started_at = NULL
+    WHERE status = 'processing'
+      AND started_at < NOW() - INTERVAL '10 minutes'
+    RETURNING id
+  `;
+  return result.length;
+}
