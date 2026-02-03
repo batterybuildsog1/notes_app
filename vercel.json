@@ -14,7 +14,7 @@
     },
     {
       "path": "/api/cron/enrich-batch",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 9 * * *"
     }
   ]
 }
