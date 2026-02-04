@@ -86,10 +86,10 @@ export function NoteEditor({ note, inline = false }: NoteEditorProps) {
       clearTimeout(autoSaveTimerRef.current);
     }
 
-    // Set new timer (1 second debounce for faster feel)
+    // Set new timer (500ms debounce for near-instant feel)
     autoSaveTimerRef.current = setTimeout(() => {
       performAutoSave();
-    }, 1000);
+    }, 500);
 
     return () => {
       if (autoSaveTimerRef.current) {
