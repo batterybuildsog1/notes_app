@@ -178,63 +178,20 @@ export async function POST(request: NextRequest) {
       original_updated_at: original_updated_at || undefined,
     });
 
-    // Step 1: Assess vagueness BEFORE queueing
-    // Clarity check stays immediate so Telegram questions go out fast
-    let enrichmentStatus: "queued" | "pending_clarification" = "queued";
-    try {
-      const clarity = await assessNoteClarity(title, content);
-
-      if (clarity.needsClarification && clarity.question && isTelegramConfigured()) {
-        // Store clarification in database
-        await createClarification(note.id, userId, clarity.question);
-
-        // Send question via Telegram
-        const result = await sendTelegramMessage(
-          `❓ *New Note Needs Context*\n\n"${title}"\n\n${clarity.question}`,
-          { parseMode: "Markdown" }
-        );
-
-        if (result.messageId) {
-          await updateClarificationTelegramId(note.id, result.messageId);
-        }
-
-        console.log(`[ENRICHMENT] Note ${note.id} needs clarification: ${clarity.question}`);
-        enrichmentStatus = "pending_clarification";
-
-        // Still generate embedding (content won't change)
-        const embedding = await generateEmbedding(`${title}\n\n${content}`);
-        if (embedding) {
-          await updateNoteEmbedding(note.id, embedding);
-        }
-
-        // Return early - skip queueing until user responds
-        return NextResponse.json(
-          { ...note, enrichment_status: enrichmentStatus },
-          { status: 201, headers: rateLimitHeaders(rateLimit) }
-        );
-      }
-    } catch (err) {
-      console.warn(`[ENRICHMENT] Vagueness check failed for note ${note.id}:`, err);
-      // Continue with queueing if vagueness check fails
-    }
-
-    // Step 2: Queue clear notes for batch entity extraction
-    // This reduces Grok API costs by ~50% through batching
-    try {
-      await queueForEnrichment(note.id, userId);
-      console.log(`[ENRICHMENT] Note ${note.id} queued for batch enrichment`);
-    } catch (err) {
-      console.error(`[ENRICHMENT] Failed to queue note ${note.id}:`, err);
-      // Continue - return the note even if queueing failed
-    }
-
-    return NextResponse.json(
-      {
-        ...note,
-        enrichment_status: enrichmentStatus,
-      },
+    // FAST RETURN: Send response immediately, enrich in background
+    // This makes note creation feel instant (<100ms)
+    const response = NextResponse.json(
+      { ...note, enrichment_status: "pending" },
       { status: 201, headers: rateLimitHeaders(rateLimit) }
     );
+
+    // Fire-and-forget: Queue enrichment without blocking response
+    // All slow operations (clarity check, Telegram, embedding) happen async
+    queueForEnrichment(note.id, userId).catch(err => {
+      console.error(`[ENRICHMENT] Failed to queue note ${note.id}:`, err);
+    });
+
+    return response;
   } catch (error) {
     console.error("Error creating note:", error);
     return NextResponse.json(
