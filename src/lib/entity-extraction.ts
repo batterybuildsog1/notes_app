@@ -54,33 +54,46 @@ export async function extractEntities(
     title.trim().length < 3 ||
     /^note\s*\d*$/i.test(title.trim());
 
-  const prompt = `Analyze this note from a real estate business and extract specific entities.
+  const prompt = `You are analyzing a note from a real estate/solar business. Extract entities AND generate meaningful semantic tags.
 
 Title: ${title || "(No title)"}
 Content: ${content.slice(0, 3000)}
 
-Extract and return ONLY valid JSON (no markdown, no explanation):
+Return ONLY valid JSON (no markdown, no explanation):
 {
   "people": ["Full Name"],
-  "companies": ["Company/Bank/Vendor Name"],
-  "properties": [
-    {"address": "Street address, City", "type": "condo|townhouse|single-family|duplex|multi-family|land|commercial"}
-  ],
-  "project": "Project or deal name if identifiable",
-  "suggestedTitle": ${isUntitled ? '"A clear, descriptive title for this note"' : "null"},
-  "tags": ["specific-tag"]
+  "companies": ["Company Name"],
+  "properties": [{"address": "123 Main St, City", "type": "single-family"}],
+  "project": "Project name if identifiable",
+  "suggestedTitle": ${isUntitled ? '"Descriptive title based on content"' : "null"},
+  "tags": ["semantic-topic-tag"]
 }
 
-Rules:
-- Only include entities ACTUALLY MENTIONED in the note
-- People: Use full names when available, first names only if that's all there is
-- Companies: Include banks, vendors, contractors, agencies, LLCs
-- Properties: Extract addresses and property types (condo, townhouse, single-family, duplex, multi-family, land, commercial)
-- Project: Name of a deal, development, or project being discussed
-- Tags: Specific keywords like "refinance", "inspection", "closing", "permit", "contractor" - NOT generic like "work" or "note"
-- suggestedTitle: Only provide if title is empty, "Untitled", or very vague. Make it descriptive based on content.
-- Return empty arrays [] for categories with no matches
-- Do NOT make up entities that aren't in the note
+## ENTITY RULES:
+- Extract ONLY entities explicitly mentioned
+- People: Full names preferred (e.g., "John Smith" not just "John")
+- Companies: Banks, contractors, vendors, LLCs, agencies
+- Properties: Street address + type (condo|townhouse|single-family|duplex|multi-family|land|commercial)
+- Project: Named deals, developments, or ongoing projects
+
+## TAG RULES - CRITICAL:
+Tags describe WHAT the note is about, NOT entity names.
+
+GOOD TAGS (use these patterns):
+- "inverter-troubleshooting" - activity type
+- "permit-application" - specific action
+- "payment-dispute" - situation
+- "site-survey" - work type
+- "callback-needed" - actionable status
+- "equipment-order" - topic
+- "loan-refinance" - subject matter
+
+BAD TAGS (avoid):
+- "solar", "install", "work", "payment" - too generic
+- Person or company names - redundant with entities
+- Single generic words
+
+Generate 2-5 SPECIFIC tags that help categorize and find this note.
 
 JSON only:`;
 
