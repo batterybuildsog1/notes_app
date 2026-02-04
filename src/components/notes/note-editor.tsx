@@ -2,42 +2,27 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { X, Save, ArrowLeft, Check, Loader2 } from "lucide-react";
 import type { Note } from "@/lib/db";
-import "@uiw/react-md-editor/markdown-editor.css";
-import "@uiw/react-markdown-preview/markdown.css";
-
-const MDEditor = dynamic(() => import("@uiw/react-md-editor"), { ssr: false });
 
 interface NoteEditorProps {
   note?: Note;
-  categories: string[];
+  inline?: boolean;
 }
-
-const defaultCategories = ["Work", "Personal", "Ideas", "Reference", "Archive"];
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
-export function NoteEditor({ note, categories }: NoteEditorProps) {
+export function NoteEditor({ note, inline = false }: NoteEditorProps) {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
   const [title, setTitle] = useState(note?.title || "");
   const [content, setContent] = useState(note?.content || "");
-  const [category, setCategory] = useState(note?.category || "");
   const [tags, setTags] = useState<string[]>(note?.tags || []);
   const [tagInput, setTagInput] = useState("");
-  const [priority, setPriority] = useState(note?.priority || "");
 
   // Auto-save state
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
@@ -46,9 +31,7 @@ export function NoteEditor({ note, categories }: NoteEditorProps) {
   const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastSavedRef = useRef({ title: note?.title || "", content: note?.content || "" });
 
-  const allCategories = [...new Set([...defaultCategories, ...categories])];
-
-  // Auto-save function
+  // Auto-save function with optimistic UI
   const performAutoSave = useCallback(async () => {
     // Only auto-save if we have an existing note (editing mode)
     // For new notes, require manual save first
@@ -61,7 +44,11 @@ export function NoteEditor({ note, categories }: NoteEditorProps) {
       return;
     }
 
-    setSaveStatus("saving");
+    // Optimistic: show saved immediately
+    setSaveStatus("saved");
+    lastSavedRef.current = { title, content };
+    setHasUnsavedChanges(false);
+
     try {
       const response = await fetch(`/api/notes/${currentNoteId}`, {
         method: "PUT",
@@ -69,25 +56,20 @@ export function NoteEditor({ note, categories }: NoteEditorProps) {
         body: JSON.stringify({
           title,
           content,
-          category: category || null,
           tags: tags.length > 0 ? tags : null,
-          priority: priority || null,
         }),
       });
 
       if (response.ok) {
-        lastSavedRef.current = { title, content };
-        setSaveStatus("saved");
-        setHasUnsavedChanges(false);
-        // Reset to idle after 2 seconds
-        setTimeout(() => setSaveStatus("idle"), 2000);
+        // Reset to idle after 1.5 seconds
+        setTimeout(() => setSaveStatus("idle"), 1500);
       } else {
         setSaveStatus("error");
       }
     } catch {
       setSaveStatus("error");
     }
-  }, [currentNoteId, title, content, category, tags, priority]);
+  }, [currentNoteId, title, content, tags]);
 
   // Debounced auto-save effect
   useEffect(() => {
@@ -104,10 +86,10 @@ export function NoteEditor({ note, categories }: NoteEditorProps) {
       clearTimeout(autoSaveTimerRef.current);
     }
 
-    // Set new timer (3 second debounce)
+    // Set new timer (1 second debounce for faster feel)
     autoSaveTimerRef.current = setTimeout(() => {
       performAutoSave();
-    }, 3000);
+    }, 1000);
 
     return () => {
       if (autoSaveTimerRef.current) {
@@ -159,9 +141,7 @@ export function NoteEditor({ note, categories }: NoteEditorProps) {
         body: JSON.stringify({
           title,
           content,
-          category: category || null,
           tags: tags.length > 0 ? tags : null,
-          priority: priority || null,
         }),
       });
 
@@ -174,11 +154,14 @@ export function NoteEditor({ note, categories }: NoteEditorProps) {
         // If this was a new note, update the ID for auto-save
         if (!currentNoteId) {
           setCurrentNoteId(savedNote.id);
-          // Update URL without full navigation
-          window.history.replaceState(null, "", `/notes/${savedNote.id}/edit`);
+          // For inline editing: update URL to note page (not /edit)
+          window.history.replaceState(null, "", `/notes/${savedNote.id}`);
         }
 
-        router.push(`/notes/${savedNote.id}`);
+        // For inline mode, stay on page. For new notes, navigate to the note
+        if (!inline && !currentNoteId) {
+          router.push(`/notes/${savedNote.id}`);
+        }
         router.refresh();
       } else {
         setSaveStatus("error");
@@ -202,16 +185,19 @@ export function NoteEditor({ note, categories }: NoteEditorProps) {
 
   return (
     <div className="space-y-4">
+      {/* Header with save status and actions */}
       <div className="flex items-center justify-between gap-4">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={handleBack}
-        >
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          Back
-        </Button>
-        <div className="flex items-center gap-3">
+        {!inline && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleBack}
+          >
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Back
+          </Button>
+        )}
+        <div className={`flex items-center gap-3 ${inline ? "ml-auto" : ""}`}>
           {/* Save status indicator */}
           {saveStatus === "saving" && (
             <span className="text-sm text-muted-foreground flex items-center gap-1">
@@ -231,46 +217,25 @@ export function NoteEditor({ note, categories }: NoteEditorProps) {
           {hasUnsavedChanges && saveStatus === "idle" && currentNoteId && (
             <span className="text-sm text-muted-foreground">Unsaved changes</span>
           )}
-          <Button onClick={handleSave} disabled={isLoading || !title.trim() || !content.trim()}>
-            <Save className="h-4 w-4 mr-2" />
-            {isLoading ? "Saving..." : "Save"}
-          </Button>
+          {/* Only show save button for new notes */}
+          {!currentNoteId && (
+            <Button onClick={handleSave} disabled={isLoading || !title.trim() || !content.trim()}>
+              <Save className="h-4 w-4 mr-2" />
+              {isLoading ? "Saving..." : "Save"}
+            </Button>
+          )}
         </div>
       </div>
 
+      {/* Title input */}
       <Input
         placeholder="Note title"
         value={title}
         onChange={(e) => setTitle(e.target.value)}
-        className="text-xl font-semibold"
+        className="text-xl font-semibold border-none shadow-none focus-visible:ring-0 px-0"
       />
 
-      <div className="flex flex-wrap gap-4">
-        <Select value={category} onValueChange={setCategory}>
-          <SelectTrigger className="w-[180px]">
-            <SelectValue placeholder="Category" />
-          </SelectTrigger>
-          <SelectContent>
-            {allCategories.map((cat) => (
-              <SelectItem key={cat} value={cat}>
-                {cat}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        <Select value={priority} onValueChange={setPriority}>
-          <SelectTrigger className="w-[140px]">
-            <SelectValue placeholder="Priority" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="high">High</SelectItem>
-            <SelectItem value="medium">Medium</SelectItem>
-            <SelectItem value="low">Low</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-
+      {/* Tags section */}
       <div className="space-y-2">
         <div className="flex flex-wrap gap-1">
           {tags.map((tag) => (
@@ -291,17 +256,17 @@ export function NoteEditor({ note, categories }: NoteEditorProps) {
           value={tagInput}
           onChange={(e) => setTagInput(e.target.value)}
           onKeyDown={handleAddTag}
+          className="max-w-xs"
         />
       </div>
 
-      <div data-color-mode="auto">
-        <MDEditor
-          value={content}
-          onChange={(val) => setContent(val || "")}
-          height={500}
-          preview="live"
-        />
-      </div>
+      {/* Content textarea - simple and fast */}
+      <Textarea
+        placeholder="Start writing..."
+        value={content}
+        onChange={(e) => setContent(e.target.value)}
+        className="min-h-[500px] resize-none font-mono text-base leading-relaxed"
+      />
     </div>
   );
 }

@@ -48,14 +48,7 @@ export function NoteCard({ note }: NoteCardProps) {
     <Link href={`/notes/${note.id}`}>
       <Card className="hover:bg-accent/50 transition-colors cursor-pointer h-full">
         <CardHeader className="pb-2">
-          <div className="flex items-start justify-between gap-2">
-            <CardTitle className="text-lg line-clamp-1">{note.title}</CardTitle>
-            {note.category && (
-              <Badge variant="secondary" className="shrink-0">
-                {note.category}
-              </Badge>
-            )}
-          </div>
+          <CardTitle className="text-lg line-clamp-1">{note.title}</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground line-clamp-2 mb-3">
