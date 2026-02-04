@@ -1,48 +1,87 @@
 /**
- * Telegram Webhook - Instant message handling
- *
- * Receives messages instantly when users reply to clarification questions.
- * No polling needed - Telegram pushes updates to this endpoint.
+ * Telegram Bot Webhook Handler
+ * - Chats with Grok (with full notes app context)
+ * - Handles clarification responses for enrichment
+ * - Responds to commands
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { neon } from "@neondatabase/serverless";
-import { sendTelegramMessage } from "@/lib/telegram";
-import {
-  getClarificationByTelegramMessageId,
-  getMostRecentPendingClarification,
-  answerClarification,
-  getNoteByIdInternal,
-  updateNote,
-  markClarificationApplied,
-  updateNoteEmbedding,
-} from "@/lib/db";
-import {
-  extractEntitiesWithContext,
-  linkEntitiesToNote,
-  entitiesToTags,
-} from "@/lib/entity-extraction";
-import { generateEmbedding } from "@/lib/enrichment";
+
+const sql = neon(process.env.DATABASE_URL!);
 
 export const runtime = "edge";
 export const dynamic = "force-dynamic";
 
 const DEFAULT_USER_ID = "3d866169-c8db-4d46-beef-dd6fc4daa930";
 
-interface TelegramUpdate {
-  update_id: number;
-  message?: {
-    message_id: number;
-    text?: string;
-    date: number;
-    chat: { id: number };
-    reply_to_message?: { message_id: number };
-  };
-}
+const GROK_SYSTEM_PROMPT = `You are Grok, Alan's Notes Assistant for notes.sunhomes.io.
 
+## Your Identity
+- You are the AI powering the notes app enrichment and this Telegram chat
+- You run on the xAI Grok API
+- You're helpful, concise, and proactive about the notes system
+
+## The Notes App (notes.sunhomes.io)
+A personal knowledge base that stores Alan's notes, synced from Notion.
+
+**Features:**
+- Notes with title, content, tags, category, project
+- AI enrichment that extracts summaries, people, companies, action items
+- Semantic search via embeddings
+- Knowledge graph linking people/companies to notes
+
+## Your Enrichment Role
+You run daily at 7 AM UTC via a cron job that:
+1. Fetches unenriched notes (batch of 75)
+2. Extracts AI summaries with: oneLiner, keyPoints, peopleAndRoles, companiesMentioned, nextSteps, sentiment
+3. Links people/companies to notes in the database
+4. Creates action items from nextSteps
+5. Sends Telegram clarifications when entities are ambiguous (e.g., "Which Ryan? Kimball or someone else?")
+
+**When you ask for clarification**, I store the response and use it to improve future enrichments.
+
+## Available API Endpoints
+- GET /api/health - Health check
+- GET /api/notes - List notes
+- GET /api/notes/:id - Get single note
+- GET /api/notes/stats - Stats and recent activity
+- POST /api/notes/semantic-search - Search by meaning
+- GET /api/issues - Find problems (missing tags, stalled enrichment)
+- POST /api/cron/daily - Trigger enrichment manually
+
+## Current Schedule
+- **Daily enrichment**: 7 AM UTC (cron job)
+- **Batch size**: 75 notes per run
+- At current rate, ~13 days to process full backlog
+
+## What You Can Help With
+1. **Answer questions** about notes, people, projects mentioned in them
+2. **Explain enrichment status** - how many processed, pending, errors
+3. **Help find information** - "What notes mention Isaac?" or "What's the status of TechRidge?"
+4. **Create quick notes** - If asked to remember something, acknowledge it
+5. **Clarify ambiguities** - When user replies to a clarification question
+6. **Proactively notify** - If you notice issues (like enrichment stalled), mention it
+
+## Communication Style
+- Be concise but helpful
+- Use the recent notes context provided to answer questions
+- If you don't know something specific, say so
+- You can ask clarifying questions when needed
+
+## Current Context
+The user is Alan. He manages multiple projects including real estate (SunHomes, TechRidge), investments (MoneyHeaven), and various business contacts.
+`;
+
+/**
+ * Handle incoming Telegram webhook
+ */
 export async function POST(request: NextRequest) {
-  // Verify webhook secret (optional but recommended)
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
   const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+  const xaiApiKey = process.env.XAI_API_KEY;
+
+  // Verify webhook secret
   if (webhookSecret) {
     const providedSecret = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
     if (providedSecret !== webhookSecret) {
@@ -50,126 +89,156 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  if (!botToken) {
+    return NextResponse.json({ error: "Bot not configured" }, { status: 500 });
+  }
+
   try {
-    const update: TelegramUpdate = await request.json();
+    const update = await request.json();
     const message = update.message;
 
-    // Only process text messages
     if (!message?.text) {
       return NextResponse.json({ ok: true });
     }
 
-    // Verify message is from authorized chat
+    const chatId = message.chat.id;
+    const text = message.text.trim();
+    const replyTo = message.reply_to_message;
+
+    // Verify authorized chat
     const authorizedChatId = process.env.TELEGRAM_CHAT_ID;
-    if (authorizedChatId && message.chat.id.toString() !== authorizedChatId) {
-      console.log(`[WEBHOOK] Ignoring message from unauthorized chat: ${message.chat.id}`);
+    if (authorizedChatId && chatId.toString() !== authorizedChatId) {
+      console.log(`[WEBHOOK] Ignoring message from unauthorized chat: ${chatId}`);
       return NextResponse.json({ ok: true });
     }
 
-    console.log(`[WEBHOOK] Received message: "${message.text.slice(0, 50)}..."`);
+    console.log(`[WEBHOOK] Received: "${text.slice(0, 50)}..."`);
 
-    // Find matching clarification
-    let clarification = null;
-    let matchMethod = "";
+    // 1. Handle commands
+    if (text.startsWith("/")) {
+      return handleCommand(text, chatId, botToken);
+    }
 
-    // Method 1: Direct reply matching
-    if (message.reply_to_message?.message_id) {
-      clarification = await getClarificationByTelegramMessageId(
-        message.reply_to_message.message_id
-      );
-      if (clarification) {
-        matchMethod = "reply";
+    // 2. Handle clarification replies
+    if (replyTo?.text?.includes("Clarification") || replyTo?.text?.includes("clarification") || replyTo?.text?.includes("Which")) {
+      const entityMatch = replyTo.text.match(/about\s+"([^"]+)"/i) ||
+                          replyTo.text.match(/Which\s+(\w+)\?/i) ||
+                          replyTo.text.match(/Issue:\s*(.+)/i);
+      if (entityMatch) {
+        const ambiguousEntity = entityMatch[1].trim();
+
+        // Store clarification
+        try {
+          await sql`
+            INSERT INTO entity_clarifications (ambiguous_entity, resolved_to, created_at)
+            VALUES (${ambiguousEntity}, ${text}, NOW())
+            ON CONFLICT DO NOTHING
+          `;
+          console.log(`[WEBHOOK] Stored clarification: "${ambiguousEntity}" -> "${text}"`);
+        } catch (e) {
+          console.warn("[WEBHOOK] Failed to store clarification:", e);
+        }
+
+        await sendMessage(chatId, `Got it! I'll remember that "${ambiguousEntity}" refers to "${text}". This will help with future note enrichment.`, botToken);
+        return NextResponse.json({ ok: true });
       }
     }
 
-    // Method 2: Most recent pending clarification
-    if (!clarification) {
-      clarification = await getMostRecentPendingClarification(DEFAULT_USER_ID);
-      if (clarification) {
-        matchMethod = "recent";
-      }
-    }
-
-    if (!clarification) {
-      console.log(`[WEBHOOK] No pending clarification found`);
+    // 3. Chat with Grok
+    if (!xaiApiKey) {
+      await sendMessage(chatId, "Grok not configured. Set XAI_API_KEY.", botToken);
       return NextResponse.json({ ok: true });
     }
 
-    // Process the clarification
-    const note = await getNoteByIdInternal(clarification.note_id);
-    if (!note) {
-      await sendTelegramMessage("Could not find the note for that clarification.");
-      return NextResponse.json({ ok: true });
-    }
+    // Get enrichment stats
+    const statsResult = await sql`
+      SELECT
+        COUNT(*) as total,
+        COUNT(*) FILTER (WHERE enriched_at IS NOT NULL) as enriched,
+        COUNT(*) FILTER (WHERE enriched_at IS NULL) as pending
+      FROM notes
+    `;
+    const stats = statsResult[0] as any;
 
-    const context = message.text;
+    // Get recent notes for context
+    const recentNotes = await sql`
+      SELECT title, content, tags, project, ai_summary FROM notes
+      WHERE user_id = ${DEFAULT_USER_ID}
+      ORDER BY updated_at DESC
+      LIMIT 10
+    `;
 
-    // Update clarification with answer
-    await answerClarification(clarification.note_id, context);
+    const notesContext = recentNotes.length > 0
+      ? recentNotes.map((n: any) => {
+          const summary = n.ai_summary ? JSON.parse(n.ai_summary)?.oneLiner : null;
+          return `- "${n.title}" ${n.project ? `[${n.project}]` : ''}: ${summary || n.content?.slice(0, 80) + '...'}`;
+        }).join('\n')
+      : "No recent notes.";
 
-    // Re-run entity extraction with user context
-    const entities = await extractEntitiesWithContext(
-      note.title,
-      note.content,
-      context
-    );
-
-    // Link entities to note
-    const linkedEntities = await linkEntitiesToNote(
-      clarification.note_id,
-      note.user_id,
-      entities
-    );
-
-    // Convert entities to tags
-    const entityTags = entitiesToTags(entities);
-
-    // Build updates
-    const updates: { category?: string; tags?: string[]; project?: string } = {};
-
-    // Merge tags
-    const existingTags = note.tags || [];
-    const newTags = entityTags.filter((t) => !existingTags.includes(t));
-    if (newTags.length > 0) {
-      updates.tags = [...existingTags, ...newTags];
-    }
-
-    // Apply project if found
-    if (entities.project && !note.project) {
-      updates.project = entities.project;
-    }
-
-    // Update note
-    if (Object.keys(updates).length > 0) {
-      await updateNote(clarification.note_id, note.user_id, updates);
-    }
-
-    // Mark as enriched
-    const sql = neon(process.env.DATABASE_URL!);
-    await sql`UPDATE notes SET enriched_at = NOW() WHERE id = ${clarification.note_id}`;
-
-    // Regenerate embedding with context
+    // Get pending clarifications (table may not exist yet)
+    let pendingClarifications: any[] = [];
     try {
-      const fullText = `${note.title}\n\n${note.content}\n\nContext: ${context}`;
-      const embedding = await generateEmbedding(fullText);
-      if (embedding) {
-        await updateNoteEmbedding(clarification.note_id, embedding);
-      }
+      pendingClarifications = await sql`
+        SELECT ambiguous_entity, context FROM enrichment_clarifications
+        WHERE status = 'pending'
+        ORDER BY created_at DESC
+        LIMIT 3
+      `;
     } catch {
-      // Non-fatal
+      // Table doesn't exist yet, skip
     }
 
-    // Mark clarification as applied
-    await markClarificationApplied(clarification.note_id);
+    const clarificationsContext = pendingClarifications.length > 0
+      ? `\n\n**Pending clarifications I need:**\n${pendingClarifications.map((c: any) => `- "${c.ambiguous_entity}": ${c.context || 'Who/what is this?'}`).join('\n')}`
+      : '';
 
-    // Send confirmation
-    const confirmationMessage = `Applied to "${note.title}"
+    const dynamicContext = `
+## Current Status
+- Total notes: ${stats.total}
+- Enriched: ${stats.enriched} (${Math.round((stats.enriched / stats.total) * 100)}%)
+- Pending: ${stats.pending}
+${clarificationsContext}
 
-Linked: ${linkedEntities.people.length} people, ${linkedEntities.companies.length} companies, ${linkedEntities.projects.length} projects${newTags.length > 0 ? `\nTags: ${newTags.join(", ")}` : ""}`;
+## Recent Notes
+${notesContext}
+`;
 
-    await sendTelegramMessage(confirmationMessage);
+    const fullSystemPrompt = GROK_SYSTEM_PROMPT + dynamicContext;
 
-    console.log(`[WEBHOOK] Processed clarification for "${note.title}" via ${matchMethod}`);
+    try {
+      const grokResponse = await fetch("https://api.x.ai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${xaiApiKey}`,
+        },
+        body: JSON.stringify({
+          model: "grok-4-1-fast-reasoning",
+          messages: [
+            { role: "system", content: fullSystemPrompt },
+            { role: "user", content: text }
+          ],
+          max_tokens: 800,
+        }),
+      });
+
+      if (!grokResponse.ok) {
+        const errText = await grokResponse.text();
+        console.error("[WEBHOOK] Grok error:", errText);
+        await sendMessage(chatId, "Grok is unavailable right now. Try again later.", botToken);
+        return NextResponse.json({ ok: true });
+      }
+
+      const grokData = await grokResponse.json();
+      const reply = grokData.choices?.[0]?.message?.content || "No response from Grok.";
+
+      await sendMessage(chatId, reply, botToken);
+      console.log(`[WEBHOOK] Grok replied: "${reply.slice(0, 50)}..."`);
+
+    } catch (err) {
+      console.error("[WEBHOOK] Grok call failed:", err);
+      await sendMessage(chatId, "Failed to reach Grok. Try again.", botToken);
+    }
 
     return NextResponse.json({ ok: true });
   } catch (error) {
@@ -178,10 +247,129 @@ Linked: ${linkedEntities.people.length} people, ${linkedEntities.companies.lengt
   }
 }
 
+/**
+ * Handle bot commands
+ */
+async function handleCommand(text: string, chatId: number, botToken: string) {
+  const command = text.split(" ")[0].toLowerCase();
+
+  switch (command) {
+    case "/start":
+      await sendMessage(chatId,
+        "Hey! I'm Grok, your Notes assistant.\n\n" +
+        "I power the AI enrichment for notes.sunhomes.io and I'm here to chat.\n\n" +
+        "Ask me about your notes, projects, or enrichment status. I also handle clarification questions when I'm uncertain about people/companies in your notes.\n\n" +
+        "Commands: /help, /status, /issues",
+        botToken
+      );
+      break;
+
+    case "/help":
+      await sendMessage(chatId,
+        "Commands:\n" +
+        "/start - Welcome\n" +
+        "/help - This help\n" +
+        "/status - Enrichment progress\n" +
+        "/issues - Find problems\n\n" +
+        "Or just chat with me about your notes!",
+        botToken
+      );
+      break;
+
+    case "/status":
+      const stats = await getStats();
+      const daysRemaining = Math.ceil(stats.pending / 75);
+      await sendMessage(chatId,
+        `Enrichment Status\n\n` +
+        `Total: ${stats.total}\n` +
+        `Enriched: ${stats.enriched} (${stats.percent}%)\n` +
+        `Pending: ${stats.pending}\n\n` +
+        `At 75/day, ~${daysRemaining} days to complete.\n` +
+        `Next run: 7 AM UTC daily`,
+        botToken
+      );
+      break;
+
+    case "/issues":
+      const issues = await getIssues();
+      await sendMessage(chatId, issues, botToken);
+      break;
+
+    default:
+      await sendMessage(chatId, "Unknown command. Try /help or just chat with me!", botToken);
+  }
+
+  return NextResponse.json({ ok: true });
+}
+
+/**
+ * Send message to Telegram
+ */
+async function sendMessage(chatId: number, text: string, botToken: string) {
+  try {
+    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text })
+    });
+  } catch (err) {
+    console.error("[WEBHOOK] Send failed:", err);
+  }
+}
+
+/**
+ * Get enrichment stats
+ */
+async function getStats() {
+  const result = await sql`
+    SELECT
+      COUNT(*) as total,
+      COUNT(*) FILTER (WHERE enriched_at IS NOT NULL) as enriched
+    FROM notes
+  `;
+  const row = result[0] as any;
+  const total = parseInt(row?.total || "0");
+  const enriched = parseInt(row?.enriched || "0");
+
+  return {
+    total,
+    enriched,
+    pending: total - enriched,
+    percent: total > 0 ? Math.round((enriched / total) * 100) : 0
+  };
+}
+
+/**
+ * Get issues report
+ */
+async function getIssues() {
+  const noTags = await sql`SELECT COUNT(*) as c FROM notes WHERE tags IS NULL OR array_length(tags, 1) IS NULL`;
+  const noCategory = await sql`SELECT COUNT(*) as c FROM notes WHERE category IS NULL`;
+  const stalled = await sql`
+    SELECT COUNT(*) as c FROM notes
+    WHERE enriched_at IS NULL
+    AND created_at < NOW() - INTERVAL '48 hours'
+  `;
+
+  const noTagsCount = (noTags[0] as any)?.c || 0;
+  const noCategoryCount = (noCategory[0] as any)?.c || 0;
+  const stalledCount = (stalled[0] as any)?.c || 0;
+
+  if (noTagsCount === 0 && noCategoryCount === 0 && stalledCount === 0) {
+    return "No issues found! Everything looks good.";
+  }
+
+  return `Issues Found:\n\n` +
+    `- Notes without tags: ${noTagsCount}\n` +
+    `- Notes without category: ${noCategoryCount}\n` +
+    `- Stalled enrichment (>48h): ${stalledCount}`;
+}
+
 // GET endpoint to check webhook status
 export async function GET() {
   return NextResponse.json({
     status: "active",
-    message: "Telegram webhook is configured",
+    message: "Grok-powered webhook",
+    model: "grok-4-1-fast-reasoning"
   });
 }
