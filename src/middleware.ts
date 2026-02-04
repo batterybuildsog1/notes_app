@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionCookie } from "better-auth/cookies";
 
 // Routes that don't require authentication
-const PUBLIC_ROUTES = ["/login", "/api/auth", "/api/health"];
+const PUBLIC_ROUTES = ["/login", "/api/auth", "/api/health", "/api/telegram/webhook", "/api/cron"];
 
 // Check if route is public
 function isPublicRoute(pathname: string): boolean {
