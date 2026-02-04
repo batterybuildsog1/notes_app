@@ -1,20 +1,8 @@
 {
   "crons": [
     {
-      "path": "/api/cron/sync",
-      "schedule": "0 6 * * *"
-    },
-    {
-      "path": "/api/cron/enrich",
+      "path": "/api/cron/daily",
       "schedule": "0 7 * * *"
-    },
-    {
-      "path": "/api/cron/telegram-poll",
-      "schedule": "0 8 * * *"
-    },
-    {
-      "path": "/api/cron/enrich-batch",
-      "schedule": "0 9 * * *"
     }
   ]
 }
