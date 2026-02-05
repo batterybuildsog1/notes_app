@@ -27,11 +27,10 @@ export async function middleware(request: NextRequest) {
   const isApiRoute = pathname.startsWith("/api/");
 
   // Public routes - allow without auth
+  // Note: Don't redirect from /login even if cookie exists - the cookie might be
+  // invalid/expired, and the page-level auth check will handle valid sessions.
+  // Redirecting here causes loops when cookies are stale.
   if (isPublicRoute(pathname)) {
-    // If user is logged in and tries to access login, redirect to home
-    if (pathname === "/login" && sessionCookie) {
-      return NextResponse.redirect(new URL("/", request.url));
-    }
     return NextResponse.next();
   }
 

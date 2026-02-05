@@ -150,6 +150,34 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
+    // Store user message in memory
+    try {
+      await sql`
+        INSERT INTO telegram_messages (chat_id, role, content)
+        VALUES (${chatId}, 'user', ${text})
+      `;
+    } catch (e) {
+      console.warn("[WEBHOOK] Failed to store user message:", e);
+    }
+
+    // Load conversation history (last 20 messages)
+    let conversationHistory: Array<{role: string, content: string}> = [];
+    try {
+      const history = await sql`
+        SELECT role, content FROM telegram_messages
+        WHERE chat_id = ${chatId}
+        ORDER BY created_at DESC
+        LIMIT 20
+      `;
+      // Reverse to get chronological order (oldest first)
+      conversationHistory = (history as any[]).reverse().map(h => ({
+        role: h.role,
+        content: h.content
+      }));
+    } catch (e) {
+      console.warn("[WEBHOOK] Failed to load history:", e);
+    }
+
     // Get enrichment stats
     const statsResult = await sql`
       SELECT
@@ -206,6 +234,21 @@ ${notesContext}
     const fullSystemPrompt = GROK_SYSTEM_PROMPT + dynamicContext;
 
     try {
+      // Build messages array with conversation history
+      const messages: Array<{role: string, content: string}> = [
+        { role: "system", content: fullSystemPrompt }
+      ];
+
+      // Add conversation history (excluding the current message which is already in history)
+      // Take all but the last message (current one) to avoid duplication
+      const historyWithoutCurrent = conversationHistory.slice(0, -1);
+      for (const msg of historyWithoutCurrent) {
+        messages.push({ role: msg.role, content: msg.content });
+      }
+
+      // Add current user message
+      messages.push({ role: "user", content: text });
+
       const grokResponse = await fetch("https://api.x.ai/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -214,10 +257,7 @@ ${notesContext}
         },
         body: JSON.stringify({
           model: "grok-4-1-fast-reasoning",
-          messages: [
-            { role: "system", content: fullSystemPrompt },
-            { role: "user", content: text }
-          ],
+          messages,
           max_tokens: 800,
         }),
       });
@@ -232,8 +272,18 @@ ${notesContext}
       const grokData = await grokResponse.json();
       const reply = grokData.choices?.[0]?.message?.content || "No response from Grok.";
 
+      // Store Grok's reply in memory
+      try {
+        await sql`
+          INSERT INTO telegram_messages (chat_id, role, content)
+          VALUES (${chatId}, 'assistant', ${reply})
+        `;
+      } catch (e) {
+        console.warn("[WEBHOOK] Failed to store assistant message:", e);
+      }
+
       await sendMessage(chatId, reply, botToken);
-      console.log(`[WEBHOOK] Grok replied: "${reply.slice(0, 50)}..."`);
+      console.log(`[WEBHOOK] Grok replied (${conversationHistory.length} msgs in history): "${reply.slice(0, 50)}..."`);
 
     } catch (err) {
       console.error("[WEBHOOK] Grok call failed:", err);
@@ -270,8 +320,10 @@ async function handleCommand(text: string, chatId: number, botToken: string) {
         "/start - Welcome\n" +
         "/help - This help\n" +
         "/status - Enrichment progress\n" +
-        "/issues - Find problems\n\n" +
-        "Or just chat with me about your notes!",
+        "/issues - Find problems\n" +
+        "/memory - Check conversation memory\n" +
+        "/clear - Clear conversation history\n\n" +
+        "I remember our conversation! Just chat naturally.",
         botToken
       );
       break;
@@ -293,6 +345,27 @@ async function handleCommand(text: string, chatId: number, botToken: string) {
     case "/issues":
       const issues = await getIssues();
       await sendMessage(chatId, issues, botToken);
+      break;
+
+    case "/clear":
+      try {
+        await sql`DELETE FROM telegram_messages WHERE chat_id = ${chatId}`;
+        await sendMessage(chatId, "Memory cleared! Starting fresh.", botToken);
+      } catch (e) {
+        await sendMessage(chatId, "Failed to clear memory.", botToken);
+      }
+      break;
+
+    case "/memory":
+      try {
+        const countResult = await sql`
+          SELECT COUNT(*) as count FROM telegram_messages WHERE chat_id = ${chatId}
+        `;
+        const count = (countResult[0] as any)?.count || 0;
+        await sendMessage(chatId, `Memory: ${count} messages stored.\n\nUse /clear to reset.`, botToken);
+      } catch (e) {
+        await sendMessage(chatId, "Memory: Unable to check.", botToken);
+      }
       break;
 
     default:
