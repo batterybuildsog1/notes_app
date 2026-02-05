@@ -147,9 +147,9 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    if (!content || typeof content !== "string") {
+    if (content && typeof content !== "string") {
       return NextResponse.json(
-        { error: "Content is required and must be a string" },
+        { error: "Content must be a string" },
         { status: 400 }
       );
     }
@@ -168,7 +168,7 @@ export async function POST(request: NextRequest) {
 
     const note = await createNote({
       title: title.trim(),
-      content: content.trim(),
+      content: content ? content.trim() : "",
       user_id: userId,
       category: category?.trim(),
       tags: Array.isArray(tags) ? tags.map((t: string) => t.trim()) : undefined,

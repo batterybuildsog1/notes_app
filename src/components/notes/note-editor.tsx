@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { X, Save, ArrowLeft, Check, Loader2 } from "lucide-react";
+import { X, ArrowLeft, Check, Loader2 } from "lucide-react";
 import type { Note } from "@/lib/db";
 
 interface NoteEditorProps {
@@ -18,7 +18,6 @@ type SaveStatus = "idle" | "saving" | "saved" | "error";
 
 export function NoteEditor({ note, inline = false }: NoteEditorProps) {
   const router = useRouter();
-  const [isLoading, setIsLoading] = useState(false);
   const [title, setTitle] = useState(note?.title || "");
   const [content, setContent] = useState(note?.content || "");
   const [tags, setTags] = useState<string[]>(note?.tags || []);
@@ -31,13 +30,54 @@ export function NoteEditor({ note, inline = false }: NoteEditorProps) {
   const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastSavedRef = useRef({ title: note?.title || "", content: note?.content || "" });
 
-  // Auto-save function with optimistic UI
-  const performAutoSave = useCallback(async () => {
-    // Only auto-save if we have an existing note (editing mode)
-    // For new notes, require manual save first
-    if (!currentNoteId) return;
-    if (!title.trim() || !content.trim()) return;
+  // Track if a creation request is already in-flight to prevent duplicates
+  const isCreatingRef = useRef(false);
 
+  // Auto-save function with optimistic UI (handles both create and update)
+  const performAutoSave = useCallback(async () => {
+    // Need at least a title to save
+    if (!title.trim()) return;
+
+    // For new notes: auto-create via POST
+    if (!currentNoteId) {
+      // Prevent duplicate creation requests
+      if (isCreatingRef.current) return;
+      isCreatingRef.current = true;
+
+      setSaveStatus("saving");
+      try {
+        const response = await fetch("/api/notes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title,
+            content,
+            tags: tags.length > 0 ? tags : null,
+          }),
+        });
+
+        if (response.ok) {
+          const savedNote = await response.json();
+          setCurrentNoteId(savedNote.id);
+          lastSavedRef.current = { title, content };
+          setHasUnsavedChanges(false);
+          setSaveStatus("saved");
+          setTimeout(() => setSaveStatus("idle"), 1500);
+          // Update URL so refreshing stays on this note
+          window.history.replaceState(null, "", `/notes/${savedNote.id}`);
+          router.refresh();
+        } else {
+          setSaveStatus("error");
+        }
+      } catch {
+        setSaveStatus("error");
+      } finally {
+        isCreatingRef.current = false;
+      }
+      return;
+    }
+
+    // For existing notes: auto-save via PUT
     // Skip if nothing changed
     if (title === lastSavedRef.current.title && content === lastSavedRef.current.content) {
       setHasUnsavedChanges(false);
@@ -69,11 +109,12 @@ export function NoteEditor({ note, inline = false }: NoteEditorProps) {
     } catch {
       setSaveStatus("error");
     }
-  }, [currentNoteId, title, content, tags]);
+  }, [currentNoteId, title, content, tags, router]);
 
-  // Debounced auto-save effect
+  // Debounced auto-save effect (works for both new and existing notes)
   useEffect(() => {
-    if (!currentNoteId) return; // Only auto-save existing notes
+    // For new notes: need at least a title to trigger auto-create
+    if (!currentNoteId && !title.trim()) return;
 
     // Check if content changed
     const hasChanges = title !== lastSavedRef.current.title || content !== lastSavedRef.current.content;
@@ -125,55 +166,6 @@ export function NoteEditor({ note, inline = false }: NoteEditorProps) {
     setTags(tags.filter((tag) => tag !== tagToRemove));
   };
 
-  const handleSave = async () => {
-    if (!title.trim() || !content.trim()) return;
-
-    setIsLoading(true);
-    setSaveStatus("saving");
-
-    try {
-      const url = currentNoteId ? `/api/notes/${currentNoteId}` : "/api/notes";
-      const method = currentNoteId ? "PUT" : "POST";
-
-      const response = await fetch(url, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title,
-          content,
-          tags: tags.length > 0 ? tags : null,
-        }),
-      });
-
-      if (response.ok) {
-        const savedNote = await response.json();
-        lastSavedRef.current = { title, content };
-        setHasUnsavedChanges(false);
-        setSaveStatus("saved");
-
-        // If this was a new note, update the ID for auto-save
-        if (!currentNoteId) {
-          setCurrentNoteId(savedNote.id);
-          // For inline editing: update URL to note page (not /edit)
-          window.history.replaceState(null, "", `/notes/${savedNote.id}`);
-        }
-
-        // For inline mode, stay on page. For new notes, navigate to the note
-        if (!inline && !currentNoteId) {
-          router.push(`/notes/${savedNote.id}`);
-        }
-        router.refresh();
-      } else {
-        setSaveStatus("error");
-      }
-    } catch (error) {
-      console.error("Error saving note:", error);
-      setSaveStatus("error");
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   // Handle back navigation with unsaved changes warning
   const handleBack = () => {
     if (hasUnsavedChanges) {
@@ -214,15 +206,8 @@ export function NoteEditor({ note, inline = false }: NoteEditorProps) {
           {saveStatus === "error" && (
             <span className="text-sm text-red-600">Save failed</span>
           )}
-          {hasUnsavedChanges && saveStatus === "idle" && currentNoteId && (
+          {hasUnsavedChanges && saveStatus === "idle" && (
             <span className="text-sm text-muted-foreground">Unsaved changes</span>
-          )}
-          {/* Only show save button for new notes */}
-          {!currentNoteId && (
-            <Button onClick={handleSave} disabled={isLoading || !title.trim() || !content.trim()}>
-              <Save className="h-4 w-4 mr-2" />
-              {isLoading ? "Saving..." : "Save"}
-            </Button>
           )}
         </div>
       </div>
