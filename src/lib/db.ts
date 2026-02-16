@@ -154,7 +154,13 @@ export async function getNotesWithEntities(
   userId: string,
   search?: string,
   category?: string,
-  options?: { limit?: number; offset?: number }
+  options?: {
+    limit?: number;
+    offset?: number;
+    personId?: string;
+    companyId?: string;
+    projectId?: string;
+  }
 ): Promise<NoteWithEntities[]> {
   const hasSearch = search && search.trim().length > 0;
   const hasCategory = category && category !== "all";
@@ -162,16 +168,6 @@ export async function getNotesWithEntities(
   const limit = options?.limit ?? 30;
   const offset = options?.offset ?? 0;
 
-  // Build WHERE clause conditions
-  const conditions = [`n.user_id = '${userId}'`];
-  if (hasCategory) {
-    conditions.push(`n.category = '${category}'`);
-  }
-  if (hasSearch) {
-    conditions.push(`(n.title ILIKE '${searchPattern}' OR n.content ILIKE '${searchPattern}')`);
-  }
-
-  // Use parameterized query with JOINs and array aggregation
   const rows = await sql`
     SELECT
       n.*,
@@ -202,6 +198,9 @@ export async function getNotesWithEntities(
     WHERE n.user_id = ${userId}
       ${hasCategory ? sql`AND n.category = ${category}` : sql``}
       ${hasSearch ? sql`AND (n.title ILIKE ${searchPattern} OR n.content ILIKE ${searchPattern})` : sql``}
+      ${options?.personId ? sql`AND EXISTS (SELECT 1 FROM note_people xnp WHERE xnp.note_id = n.id AND xnp.person_id = ${options.personId})` : sql``}
+      ${options?.companyId ? sql`AND EXISTS (SELECT 1 FROM note_companies xnc WHERE xnc.note_id = n.id AND xnc.company_id = ${options.companyId})` : sql``}
+      ${options?.projectId ? sql`AND EXISTS (SELECT 1 FROM note_projects xpr WHERE xpr.note_id = n.id AND xpr.project_id = ${options.projectId})` : sql``}
     GROUP BY n.id
     ORDER BY COALESCE(n.original_updated_at, n.updated_at) DESC
     LIMIT ${limit} OFFSET ${offset}

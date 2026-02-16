@@ -40,6 +40,49 @@ interface Note {
   original_updated_at: Date | null;
 }
 
+async function startSyncRun(userId: string, direction: string): Promise<string | null> {
+  try {
+    const rows = await sql`
+      INSERT INTO sync_runs (user_id, provider, direction, status)
+      VALUES (${userId}, 'notion', ${direction}, 'running')
+      RETURNING id
+    `;
+    return (rows[0] as { id: string }).id;
+  } catch {
+    // sync_runs may not exist yet in some environments; don't block sync.
+    return null;
+  }
+}
+
+async function finishSyncRun(
+  runId: string | null,
+  payload: {
+    status: "success" | "error";
+    durationMs: number;
+    pulled: number;
+    pushed: number;
+    errors: string[];
+  }
+): Promise<void> {
+  if (!runId) return;
+
+  try {
+    await sql`
+      UPDATE sync_runs
+      SET status = ${payload.status},
+          finished_at = NOW(),
+          duration_ms = ${payload.durationMs},
+          pulled_count = ${payload.pulled},
+          pushed_count = ${payload.pushed},
+          error_count = ${payload.errors.length},
+          error_sample = ${JSON.stringify(payload.errors.slice(0, 5))}::jsonb
+      WHERE id = ${runId}
+    `;
+  } catch {
+    // Non-fatal
+  }
+}
+
 /**
  * GET - Check sync status and Notion connection
  */
@@ -75,6 +118,21 @@ export async function GET(request: NextRequest) {
     `;
     const unlinkedCount = parseInt((unlinkedResult[0] as { count: string }).count);
 
+    let lastRun: Record<string, unknown> | null = null;
+    try {
+      const runRows = await sql`
+        SELECT id, direction, status, started_at, finished_at, duration_ms,
+               pulled_count, pushed_count, error_count, error_sample
+        FROM sync_runs
+        WHERE user_id = ${userId} AND provider = 'notion'
+        ORDER BY started_at DESC
+        LIMIT 1
+      `;
+      lastRun = (runRows[0] as Record<string, unknown>) || null;
+    } catch {
+      // sync_runs may not exist yet.
+    }
+
     return NextResponse.json({
       notion: notionStatus,
       sync: {
@@ -82,6 +140,7 @@ export async function GET(request: NextRequest) {
         lastPushAt: state?.last_push_at || null,
         linkedNotes: linkedCount,
         unlinkedNotes: unlinkedCount,
+        lastRun,
       },
     });
   } catch (error) {
@@ -106,6 +165,8 @@ export async function POST(request: NextRequest) {
   const userId = getServiceUserId();
   const body = await request.json().catch(() => ({}));
   const direction = body.direction || "both";
+  const runStart = Date.now();
+  const runId = await startSyncRun(userId, direction);
 
   const result = {
     pulled: 0,
@@ -172,12 +233,31 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const durationMs = Date.now() - runStart;
+    await finishSyncRun(runId, {
+      status: result.errors.length === 0 ? "success" : "error",
+      durationMs,
+      pulled: result.pulled,
+      pushed: result.pushed,
+      errors: result.errors,
+    });
+
     return NextResponse.json({
       ok: result.errors.length === 0,
+      durationMs,
       ...result,
     });
   } catch (error) {
     console.error("Sync error:", error);
+    const durationMs = Date.now() - runStart;
+    await finishSyncRun(runId, {
+      status: "error",
+      durationMs,
+      pulled: result.pulled,
+      pushed: result.pushed,
+      errors: [error instanceof Error ? error.message : "Unknown"],
+    });
+
     return NextResponse.json(
       { error: "Sync failed", details: error instanceof Error ? error.message : "Unknown" },
       { status: 500 }

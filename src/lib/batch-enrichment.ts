@@ -25,7 +25,7 @@ interface BatchNoteInput {
   userId: string;
 }
 
-interface EnrichmentResult {
+export interface EnrichmentResult {
   summary: {
     context: string;
     keyPoints: string[];
@@ -158,7 +158,7 @@ export async function batchExtractEnrichments(
       },
       body: JSON.stringify({
         model: GROK_MODEL,
-        max_tokens: 8000,
+        max_tokens: 16000,
         messages: [{ role: "user", content: prompt }],
         temperature: 0.1,
       }),
@@ -210,7 +210,9 @@ export async function batchExtractEnrichments(
           projects: result.entities?.projects || [],
         },
         tags: (result.tags || []).map((t: string) => t.toLowerCase().replace(/\s+/g, '-')),
-        ambiguities: (result.ambiguities || []).filter((a: any) => a.question),
+        ambiguities: (result.ambiguities || []).filter(
+          (a: { question?: string }) => Boolean(a.question)
+        ),
       });
     }
 
@@ -238,10 +240,11 @@ export async function findOrCreatePerson(userId: string, name: string): Promise<
   }
   
   // Create new person
+  const normalizedName = name.toLowerCase().trim();
   const result = await sql`
-    INSERT INTO people (user_id, name, type)
-    VALUES (${userId}, ${name}, 'contact')
-    ON CONFLICT (user_id, name) DO UPDATE SET name = EXCLUDED.name
+    INSERT INTO people (user_id, name, normalized_name, type)
+    VALUES (${userId}, ${name}, ${normalizedName}, 'contact')
+    ON CONFLICT (user_id, normalized_name) DO UPDATE SET name = EXCLUDED.name
     RETURNING id, name
   `;
   
@@ -291,24 +294,29 @@ export async function createActionItem(
 export async function sendTelegramClarification(
   noteTitle: string,
   ambiguities: Array<{ type: string; text: string; question: string }>,
-  userId: string
-): Promise<void> {
+  userId: string,
+  noteId?: string
+): Promise<number> {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
-  
-  if (!botToken || !chatId || ambiguities.length === 0) return;
-  
-  for (const ambiguity of ambiguities.slice(0, 3)) { // Max 3 clarifications per note
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://notes.sunhomes.io';
+
+  if (!botToken || !chatId || ambiguities.length === 0) return 0;
+
+  let sent = 0;
+  const noteLink = noteId ? `${appUrl}/notes/${noteId}` : '';
+
+  for (const ambiguity of ambiguities.slice(0, 2)) { // Max 2 clarifications per note
     const message = `❓ *Clarification Needed*
 
-*Note:* "${noteTitle.slice(0, 80)}${noteTitle.length > 80 ? '...' : ''}"
+*Note:* [${noteTitle.slice(0, 80)}${noteTitle.length > 80 ? '...' : ''}](${noteLink})
 
 *Issue:* ${ambiguity.text}
 
 *Question:* ${ambiguity.question}
 
 _Reply to this message with the answer._`;
-    
+
     try {
       await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
         method: 'POST',
@@ -316,15 +324,18 @@ _Reply to this message with the answer._`;
         body: JSON.stringify({
           chat_id: chatId,
           text: message,
-          parse_mode: 'Markdown'
+          parse_mode: 'Markdown',
+          disable_web_page_preview: true
         })
       });
-      
+
+      sent++;
       console.log(`[CLARIFICATION] Sent for note: ${noteTitle.slice(0, 40)}`);
     } catch (err) {
       console.error('[CLARIFICATION] Failed to send:', err);
     }
   }
+  return sent;
 }
 
 /**

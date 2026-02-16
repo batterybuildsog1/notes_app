@@ -1,12 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   getNotesWithEntities,
-  getNotesByEntity,
   createNote,
-  updateNoteEmbedding,
-  createClarification,
-  updateClarificationTelegramId,
-  getNoteEntities,
   NoteWithEntities,
   getTemplateById,
   queueForEnrichment,
@@ -14,8 +9,6 @@ import {
 import { getAuthUserId } from "@/lib/auth";
 import { checkServiceAuth } from "@/lib/service-auth";
 import { checkRateLimit, rateLimitHeaders } from "@/lib/rate-limit";
-import { generateEmbedding, assessNoteClarity } from "@/lib/enrichment";
-import { sendTelegramMessage, isTelegramConfigured } from "@/lib/telegram";
 
 async function getUserId(request: NextRequest): Promise<string | null> {
   // Try session auth first
@@ -59,37 +52,19 @@ export async function GET(request: NextRequest) {
     const companyId = searchParams.get("company") || undefined;
     const projectId = searchParams.get("project") || undefined;
 
-    // Get notes with entities in a single query (no N+1!)
-    let notesWithEntities: NoteWithEntities[];
-    if (personId) {
-      // Entity filters still need the old pattern (less common, fewer results)
-      const notes = await getNotesByEntity(userId, "person", personId);
-      notesWithEntities = await Promise.all(
-        notes.map(async (note) => {
-          const entities = await getNoteEntities(note.id);
-          return { ...note, ...entities };
-        })
-      );
-    } else if (companyId) {
-      const notes = await getNotesByEntity(userId, "company", companyId);
-      notesWithEntities = await Promise.all(
-        notes.map(async (note) => {
-          const entities = await getNoteEntities(note.id);
-          return { ...note, ...entities };
-        })
-      );
-    } else if (projectId) {
-      const notes = await getNotesByEntity(userId, "project", projectId);
-      notesWithEntities = await Promise.all(
-        notes.map(async (note) => {
-          const entities = await getNoteEntities(note.id);
-          return { ...note, ...entities };
-        })
-      );
-    } else {
-      // Main path: single query with JOINs
-      notesWithEntities = await getNotesWithEntities(userId, search, category, { limit, offset });
-    }
+    // Single query path for main list + entity filters (no N+1)
+    const notesWithEntities: NoteWithEntities[] = await getNotesWithEntities(
+      userId,
+      search,
+      category,
+      {
+        limit,
+        offset,
+        personId,
+        companyId,
+        projectId,
+      }
+    );
 
     return NextResponse.json(notesWithEntities, { headers: rateLimitHeaders(rateLimit) });
   } catch (error) {
@@ -121,7 +96,8 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    let { title, content, category, tags, priority, project, original_created_at, original_updated_at, templateId } = body;
+    let { title, content, category, tags } = body;
+    const { priority, project, original_created_at, original_updated_at, templateId } = body;
 
     // If templateId provided, load template and use as defaults
     if (templateId) {
