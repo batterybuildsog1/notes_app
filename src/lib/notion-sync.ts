@@ -4,12 +4,13 @@
  */
 
 const NOTION_API_KEY = process.env.NOTION_API_KEY;
-const NOTION_VERSION = "2022-06-28";
+const NOTION_VERSION = "2025-09-03";
 const NOTION_BASE_URL = "https://api.notion.com/v1";
 
-// Parent page ID where new notes will be created in Notion
-// This should be a page that the integration has access to
+// Parent destination for created notes in Notion.
+// Prefer a data source (database) when available; page parent is also supported.
 const NOTION_PARENT_PAGE_ID = process.env.NOTION_PARENT_PAGE_ID;
+const NOTION_PARENT_DATABASE_ID = process.env.NOTION_PARENT_DATABASE_ID;
 
 interface NotionPage {
   id: string;
@@ -85,12 +86,25 @@ export async function searchNotionPages(
   since?: Date,
   cursor?: string
 ): Promise<NotionSearchResult> {
-  const body: Record<string, unknown> = {
-    page_size: 100,
-    filter: {
+  const filters: Record<string, unknown>[] = [
+    {
       property: "object",
       value: "page",
     },
+  ];
+
+  if (since) {
+    filters.push({
+      timestamp: "last_edited_time",
+      last_edited_time: {
+        on_or_after: since.toISOString(),
+      },
+    });
+  }
+
+  const body: Record<string, unknown> = {
+    page_size: 100,
+    filter: filters.length === 1 ? filters[0] : { and: filters },
     sort: {
       direction: "descending",
       timestamp: "last_edited_time",
@@ -260,10 +274,27 @@ function richTextToMarkdown(richTexts: RichText[]): string {
  * Extract title from Notion page
  */
 export function getPageTitle(page: NotionPage): string {
-  const titleProp = page.properties?.title;
-  if (titleProp?.title && titleProp.title.length > 0) {
-    return titleProp.title.map((t) => t.plain_text).join("");
+  const properties = page.properties || {};
+
+  // 1) Common case: top-level property named "title"
+  const directTitle = properties.title as
+    | { title?: Array<{ plain_text: string }> }
+    | undefined;
+  if (directTitle?.title?.length) {
+    const text = directTitle.title.map((t) => t.plain_text).join("").trim();
+    if (text) return text;
   }
+
+  // 2) Database rows often use a custom property name with type=title
+  for (const value of Object.values(properties) as Array<
+    { type?: string; title?: Array<{ plain_text: string }> } | undefined
+  >) {
+    if (value?.type === "title" && value.title?.length) {
+      const text = value.title.map((t) => t.plain_text).join("").trim();
+      if (text) return text;
+    }
+  }
+
   return "Untitled";
 }
 
@@ -278,8 +309,10 @@ export async function createNotionPage(
 ): Promise<NotionPage> {
   const parent = parentPageId || NOTION_PARENT_PAGE_ID;
 
-  if (!parent) {
-    throw new Error("No parent page ID configured for creating Notion pages. Set NOTION_PARENT_PAGE_ID.");
+  if (!parent && !NOTION_PARENT_DATABASE_ID) {
+    throw new Error(
+      "No Notion parent configured for creating pages. Set NOTION_PARENT_PAGE_ID or NOTION_PARENT_DATABASE_ID."
+    );
   }
 
   // Convert markdown to Notion blocks
@@ -299,9 +332,9 @@ export async function createNotionPage(
   }
 
   const body = {
-    parent: {
-      page_id: parent,
-    },
+    parent: parent
+      ? { page_id: parent }
+      : { database_id: NOTION_PARENT_DATABASE_ID as string },
     properties: {
       title: {
         title: [

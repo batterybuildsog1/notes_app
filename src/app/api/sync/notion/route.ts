@@ -14,7 +14,6 @@ import {
   getPageTitle,
   createNotionPage,
   checkNotionConnection,
-  type NotionPage,
 } from "@/lib/notion-sync";
 import { generateEmbedding } from "@/lib/enrichment";
 import { enrichWithEntities } from "@/lib/entity-extraction";
@@ -356,12 +355,12 @@ async function pushToNotion(userId: string): Promise<{
   const pushed: string[] = [];
   const errors: string[] = [];
 
-  // Check if we have a parent page configured
-  if (!process.env.NOTION_PARENT_PAGE_ID) {
+  // Check if we have a parent destination configured (page or database)
+  if (!process.env.NOTION_PARENT_PAGE_ID && !process.env.NOTION_PARENT_DATABASE_ID) {
     return {
       count: 0,
       pushed: [],
-      errors: ["NOTION_PARENT_PAGE_ID not configured - push disabled"],
+      errors: ["Notion parent not configured - set NOTION_PARENT_PAGE_ID or NOTION_PARENT_DATABASE_ID"],
     };
   }
 
