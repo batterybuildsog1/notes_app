@@ -235,9 +235,13 @@ async function pullFromNotion(
         const title = getPageTitle(page);
 
         if (existing) {
-          // Update existing note if Notion version is newer
-          const noteUpdatedAt = new Date(existing.updated_at);
-          if (pageEditedAt > noteUpdatedAt) {
+          // Update existing note only when Notion has moved forward since our last synced Notion edit.
+          // Do NOT compare against notes.updated_at because local enrichment/tag edits also bump that field.
+          const lastSyncedNotionEdit = existing.notion_last_edited
+            ? new Date(existing.notion_last_edited)
+            : null;
+
+          if (!lastSyncedNotionEdit || pageEditedAt > lastSyncedNotionEdit) {
             // Preserve original_created_at, only update original_updated_at
             await sql`
               UPDATE notes

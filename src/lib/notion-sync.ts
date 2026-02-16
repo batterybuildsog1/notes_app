@@ -50,6 +50,13 @@ interface SyncResult {
   errors: string[];
 }
 
+interface ResolvedParent {
+  parent:
+    | { page_id: string }
+    | { database_id: string };
+  titlePropertyKey?: string;
+}
+
 /**
  * Make authenticated request to Notion API
  */
@@ -77,6 +84,47 @@ async function notionRequest<T>(
   }
 
   return response.json();
+}
+
+async function resolveNotionParent(parentPageId?: string): Promise<ResolvedParent> {
+  if (parentPageId) {
+    return { parent: { page_id: parentPageId } };
+  }
+
+  if (!NOTION_PARENT_DATABASE_ID) {
+    throw new Error(
+      "No Notion parent configured for creating pages. Set NOTION_PARENT_PAGE_ID or NOTION_PARENT_DATABASE_ID."
+    );
+  }
+
+  // Support passing either a data_source id (preferred in modern API)
+  // or a legacy database id.
+  try {
+    const dataSource = await notionRequest<{
+      parent?: { database_id?: string };
+      properties?: Record<string, { type?: string }>;
+    }>(`/data_sources/${NOTION_PARENT_DATABASE_ID}`);
+
+    const databaseId = dataSource.parent?.database_id;
+    if (!databaseId) {
+      throw new Error("Configured data source does not expose a database parent id");
+    }
+
+    const titleEntry = Object.entries(dataSource.properties || {}).find(
+      ([, prop]) => prop?.type === "title"
+    );
+
+    return {
+      parent: { database_id: databaseId },
+      titlePropertyKey: titleEntry?.[0] || "title",
+    };
+  } catch {
+    // Fall back to assuming NOTION_PARENT_DATABASE_ID is already a database id.
+    return {
+      parent: { database_id: NOTION_PARENT_DATABASE_ID },
+      titlePropertyKey: "title",
+    };
+  }
 }
 
 /**
@@ -307,13 +355,7 @@ export async function createNotionPage(
   parentPageId?: string,
   originalCreatedAt?: Date | string | null
 ): Promise<NotionPage> {
-  const parent = parentPageId || NOTION_PARENT_PAGE_ID;
-
-  if (!parent && !NOTION_PARENT_DATABASE_ID) {
-    throw new Error(
-      "No Notion parent configured for creating pages. Set NOTION_PARENT_PAGE_ID or NOTION_PARENT_DATABASE_ID."
-    );
-  }
+  const resolvedParent = await resolveNotionParent(parentPageId || NOTION_PARENT_PAGE_ID);
 
   // Convert markdown to Notion blocks
   const blocks = markdownToBlocks(content);
@@ -331,12 +373,12 @@ export async function createNotionPage(
     });
   }
 
+  const titlePropertyKey = resolvedParent.titlePropertyKey || "title";
+
   const body = {
-    parent: parent
-      ? { page_id: parent }
-      : { database_id: NOTION_PARENT_DATABASE_ID as string },
+    parent: resolvedParent.parent,
     properties: {
-      title: {
+      [titlePropertyKey]: {
         title: [
           {
             text: {
