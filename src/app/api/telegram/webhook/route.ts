@@ -31,6 +31,56 @@ function getAllowedChatIds(): Set<string> {
   return ids;
 }
 
+function extractSearchTerms(text: string): string[] {
+  const stop = new Set([
+    "what", "when", "where", "which", "with", "about", "from", "that", "this", "have", "your", "notes",
+    "show", "tell", "does", "look", "into", "please", "could", "would", "should", "there", "their", "then",
+    "recent", "mention", "mentions", "mentioned", "status", "right", "now", "alan", "my", "the", "and", "for",
+    "are", "who", "how", "why", "get", "give", "full", "text", "any", "more", "than", "over", "under",
+  ]);
+
+  const words = text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .split(/\s+/)
+    .map((w) => w.trim())
+    .filter((w) => w.length >= 3 && !stop.has(w));
+
+  return [...new Set(words)].slice(0, 6);
+}
+
+async function getRelevantNotesContext(userId: string, text: string): Promise<string> {
+  const terms = extractSearchTerms(text);
+  if (terms.length === 0) return "";
+
+  const patterns = terms.map((t) => `%${t}%`);
+
+  const rows = await sql`
+    SELECT id, title, content, project, tags, updated_at
+    FROM notes n
+    WHERE n.user_id = ${userId}
+      AND EXISTS (
+        SELECT 1
+        FROM unnest(${patterns}::text[]) p
+        WHERE n.title ILIKE p
+           OR n.content ILIKE p
+           OR COALESCE(n.project, '') ILIKE p
+           OR COALESCE(array_to_string(n.tags, ' '), '') ILIKE p
+      )
+    ORDER BY n.updated_at DESC
+    LIMIT 5
+  `;
+
+  if (rows.length === 0) return "";
+
+  const lines = (rows as Array<{ id: string; title: string; content: string; project: string | null }>).map((r) => {
+    const snippet = (r.content || "").replace(/\s+/g, " ").slice(0, 140);
+    return `- #${r.id} "${r.title}" ${r.project ? `[${r.project}]` : ""}: ${snippet}${snippet.length >= 140 ? "..." : ""}`;
+  });
+
+  return `\n## Retrieved Matches (query terms: ${terms.join(", ")})\n${lines.join("\n")}`;
+}
+
 async function isDuplicateUpdate(updateId?: number): Promise<boolean> {
   if (typeof updateId !== "number") return false;
 
@@ -285,6 +335,8 @@ export async function POST(request: NextRequest) {
       10
     );
 
+    const retrievedContext = await getRelevantNotesContext(DEFAULT_USER_ID, text);
+
     const dynamicContext = `
 ## Current Status
 - Total notes: ${totalNotes}
@@ -294,6 +346,7 @@ export async function POST(request: NextRequest) {
 
 ## Recent Notes
 ${notesContext}
+${retrievedContext}
 `;
 
     const fullSystemPrompt = GROK_SYSTEM_PROMPT + dynamicContext;
