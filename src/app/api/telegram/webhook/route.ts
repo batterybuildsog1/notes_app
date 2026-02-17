@@ -55,8 +55,40 @@ async function getRelevantNotesContext(userId: string, text: string): Promise<st
 
   const patterns = terms.map((t) => `%${t}%`);
 
-  const rows = await sql`
-    SELECT id, title, content, project, tags, updated_at
+  const personMatches = await sql`
+    SELECT DISTINCT n.id, n.title, n.content, n.project, p.name as matched_entity, 'person' as match_type, n.updated_at
+    FROM people p
+    JOIN note_people np ON np.person_id = p.id
+    JOIN notes n ON n.id = np.note_id
+    WHERE p.user_id = ${userId}
+      AND n.user_id = ${userId}
+      AND EXISTS (
+        SELECT 1
+        FROM unnest(${patterns}::text[]) pat
+        WHERE p.name ILIKE pat
+      )
+    ORDER BY n.updated_at DESC
+    LIMIT 5
+  `;
+
+  const projectMatches = await sql`
+    SELECT DISTINCT n.id, n.title, n.content, n.project, pr.name as matched_entity, 'project' as match_type, n.updated_at
+    FROM projects pr
+    JOIN note_projects npr ON npr.project_id = pr.id
+    JOIN notes n ON n.id = npr.note_id
+    WHERE pr.user_id = ${userId}
+      AND n.user_id = ${userId}
+      AND EXISTS (
+        SELECT 1
+        FROM unnest(${patterns}::text[]) pat
+        WHERE pr.name ILIKE pat
+      )
+    ORDER BY n.updated_at DESC
+    LIMIT 5
+  `;
+
+  const textMatches = await sql`
+    SELECT id, title, content, project, NULL::text as matched_entity, 'text' as match_type, updated_at
     FROM notes n
     WHERE n.user_id = ${userId}
       AND EXISTS (
@@ -68,14 +100,39 @@ async function getRelevantNotesContext(userId: string, text: string): Promise<st
            OR COALESCE(array_to_string(n.tags, ' '), '') ILIKE p
       )
     ORDER BY n.updated_at DESC
-    LIMIT 5
+    LIMIT 6
   `;
 
-  if (rows.length === 0) return "";
+  type MatchRow = {
+    id: string;
+    title: string;
+    content: string;
+    project: string | null;
+    matched_entity: string | null;
+    match_type: string;
+  };
 
-  const lines = (rows as Array<{ id: string; title: string; content: string; project: string | null }>).map((r) => {
+  const combined = [
+    ...(personMatches as MatchRow[]),
+    ...(projectMatches as MatchRow[]),
+    ...(textMatches as MatchRow[]),
+  ];
+
+  const deduped = new Map<string, MatchRow>();
+  for (const row of combined) {
+    if (!deduped.has(row.id)) deduped.set(row.id, row);
+    if (deduped.size >= 6) break;
+  }
+
+  if (deduped.size === 0) return "";
+
+  const lines = [...deduped.values()].map((r) => {
     const snippet = (r.content || "").replace(/\s+/g, " ").slice(0, 140);
-    return `- #${r.id} "${r.title}" ${r.project ? `[${r.project}]` : ""}: ${snippet}${snippet.length >= 140 ? "..." : ""}`;
+    const reason = r.match_type === "text"
+      ? "text match"
+      : `${r.match_type} match: ${r.matched_entity}`;
+
+    return `- #${r.id} "${r.title}" ${r.project ? `[${r.project}]` : ""} (${reason}): ${snippet}${snippet.length >= 140 ? "..." : ""}`;
   });
 
   return `\n## Retrieved Matches (query terms: ${terms.join(", ")})\n${lines.join("\n")}`;
@@ -126,6 +183,11 @@ Primary jobs:
 - Answer Alan's questions about his notes and projects.
 - Give clear status on sync/enrichment health when asked.
 - Acknowledge “remember this” messages briefly.
+
+Response format (default):
+- Start with a 1–2 sentence direct answer.
+- Then add up to 3 bullets with key evidence.
+- End with a short "Sources:" line listing note IDs when relevant.
 
 Tone:
 - Calm, practical, direct.
