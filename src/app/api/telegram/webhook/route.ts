@@ -15,6 +15,53 @@ export const dynamic = "force-dynamic";
 
 const DEFAULT_USER_ID = "3d866169-c8db-4d46-beef-dd6fc4daa930";
 
+function getAllowedChatIds(): Set<string> {
+  const ids = new Set<string>();
+  const primary = process.env.TELEGRAM_CHAT_ID;
+  const extra = process.env.TELEGRAM_CHAT_IDS;
+
+  if (primary) ids.add(primary.trim());
+  if (extra) {
+    for (const id of extra.split(",")) {
+      const v = id.trim();
+      if (v) ids.add(v);
+    }
+  }
+
+  return ids;
+}
+
+async function isDuplicateUpdate(updateId?: number): Promise<boolean> {
+  if (typeof updateId !== "number") return false;
+
+  try {
+    const rows = await sql`
+      SELECT value FROM key_value WHERE key = 'telegram_last_update_id'
+    `;
+    if (rows.length === 0) return false;
+
+    const last = parseInt((rows[0] as { value: string }).value || "0", 10);
+    return Number.isFinite(last) && updateId <= last;
+  } catch {
+    return false;
+  }
+}
+
+async function markUpdateProcessed(updateId?: number): Promise<void> {
+  if (typeof updateId !== "number") return;
+
+  try {
+    await sql`
+      INSERT INTO key_value (key, value, updated_at)
+      VALUES ('telegram_last_update_id', ${updateId.toString()}, NOW())
+      ON CONFLICT (key)
+      DO UPDATE SET value = ${updateId.toString()}, updated_at = NOW()
+    `;
+  } catch {
+    // non-fatal
+  }
+}
+
 const GROK_SYSTEM_PROMPT = `You are Alan's Notes Assistant for notes.sunhomes.io.
 
 Rules (strict):
@@ -56,10 +103,30 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const update = await request.json();
-    const message = update.message;
+    const update = await request.json() as {
+      update_id?: number;
+      message?: {
+        chat: { id: number };
+        text?: string;
+        message_id?: number;
+        reply_to_message?: { message_id?: number };
+      };
+      edited_message?: {
+        chat: { id: number };
+        text?: string;
+        message_id?: number;
+        reply_to_message?: { message_id?: number };
+      };
+    };
+
+    if (await isDuplicateUpdate(update.update_id)) {
+      return NextResponse.json({ ok: true });
+    }
+
+    const message = update.message || update.edited_message;
 
     if (!message?.text) {
+      await markUpdateProcessed(update.update_id);
       return NextResponse.json({ ok: true });
     }
 
@@ -67,10 +134,11 @@ export async function POST(request: NextRequest) {
     const text = message.text.trim();
     const replyTo = message.reply_to_message;
 
-    // Verify authorized chat
-    const authorizedChatId = process.env.TELEGRAM_CHAT_ID;
-    if (authorizedChatId && chatId.toString() !== authorizedChatId) {
+    // Verify authorized chat(s)
+    const allowedChatIds = getAllowedChatIds();
+    if (allowedChatIds.size > 0 && !allowedChatIds.has(chatId.toString())) {
       console.log(`[WEBHOOK] Ignoring message from unauthorized chat: ${chatId}`);
+      await markUpdateProcessed(update.update_id);
       return NextResponse.json({ ok: true });
     }
 
@@ -78,7 +146,9 @@ export async function POST(request: NextRequest) {
 
     // 1. Handle commands
     if (text.startsWith("/")) {
-      return handleCommand(text, chatId, botToken);
+      const res = await handleCommand(text, chatId, botToken);
+      await markUpdateProcessed(update.update_id);
+      return res;
     }
 
     // 2. Handle clarification replies deterministically (no regex guessing)
@@ -121,6 +191,7 @@ export async function POST(request: NextRequest) {
             `Thanks — saved your clarification for note ${clarification.note_id}.`,
             botToken
           );
+          await markUpdateProcessed(update.update_id);
           return NextResponse.json({ ok: true });
         }
       } catch (e) {
@@ -131,6 +202,7 @@ export async function POST(request: NextRequest) {
     // 3. Chat with Grok
     if (!xaiApiKey) {
       await sendMessage(chatId, "Grok not configured. Set XAI_API_KEY.", botToken);
+      await markUpdateProcessed(update.update_id);
       return NextResponse.json({ ok: true });
     }
 
@@ -262,6 +334,7 @@ ${notesContext}
         const errText = await grokResponse.text();
         console.error("[WEBHOOK] Grok error:", errText);
         await sendMessage(chatId, "Grok is unavailable right now. Try again later.", botToken);
+        await markUpdateProcessed(update.update_id);
         return NextResponse.json({ ok: true });
       }
 
@@ -286,6 +359,7 @@ ${notesContext}
       await sendMessage(chatId, "Failed to reach Grok. Try again.", botToken);
     }
 
+    await markUpdateProcessed(update.update_id);
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("[WEBHOOK] Error:", error);

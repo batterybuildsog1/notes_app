@@ -28,8 +28,11 @@ async function setupWebhook() {
     webhookUrl = webhookUrl.replace(/\/$/, "") + "/api/telegram/webhook";
   }
 
+  const dropPending = process.env.TELEGRAM_DROP_PENDING_UPDATES === "true";
+
   console.log("Setting up Telegram webhook...");
   console.log(`URL: ${webhookUrl}`);
+  console.log(`drop_pending_updates: ${dropPending}`);
 
   try {
     // First, delete any existing webhook
@@ -42,8 +45,8 @@ async function setupWebhook() {
     // Set up new webhook
     const body = {
       url: webhookUrl,
-      allowed_updates: ["message"],
-      drop_pending_updates: true,
+      allowed_updates: ["message", "edited_message"],
+      drop_pending_updates: dropPending,
     };
 
     // Add secret token if configured
