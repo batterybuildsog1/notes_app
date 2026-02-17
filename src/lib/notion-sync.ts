@@ -134,25 +134,16 @@ export async function searchNotionPages(
   since?: Date,
   cursor?: string
 ): Promise<NotionSearchResult> {
-  const filters: Record<string, unknown>[] = [
-    {
-      property: "object",
-      value: "page",
-    },
-  ];
-
-  if (since) {
-    filters.push({
-      timestamp: "last_edited_time",
-      last_edited_time: {
-        on_or_after: since.toISOString(),
-      },
-    });
-  }
+  // NOTE: Notion /search filter schema differs across API versions.
+  // Keep this broad + stable and apply `since` filtering in pullFromNotion.
+  void since;
 
   const body: Record<string, unknown> = {
     page_size: 100,
-    filter: filters.length === 1 ? filters[0] : { and: filters },
+    filter: {
+      property: "object",
+      value: "page",
+    },
     sort: {
       direction: "descending",
       timestamp: "last_edited_time",

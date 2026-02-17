@@ -271,10 +271,6 @@ export async function createActionItem(
   text: string, 
   source: string = 'ai_extracted'
 ): Promise<void> {
-  // Try to extract assignee from text
-  const assigneeMatch = text.match(/(?:Isaac|Rob|Ryan|Brad|Sarah|you|we)(?:\s+(?:Barlow|McFarlane|Kimball|Buchanan))?/i);
-  const assignee = assigneeMatch ? assigneeMatch[0].toLowerCase() : null;
-  
   // Determine priority from text
   let priority = 'medium';
   if (text.match(/\b(urgent|asap|critical|immediately)\b/i)) priority = 'critical';
@@ -318,7 +314,7 @@ export async function sendTelegramClarification(
 _Reply to this message with the answer._`;
 
     try {
-      await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      const tgResponse = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -328,6 +324,29 @@ _Reply to this message with the answer._`;
           disable_web_page_preview: true
         })
       });
+
+      if (!tgResponse.ok) {
+        throw new Error(`Telegram sendMessage failed: ${tgResponse.status}`);
+      }
+
+      const tgData = await tgResponse.json() as { result?: { message_id?: number } };
+      const telegramMessageId = tgData?.result?.message_id;
+
+      if (telegramMessageId && noteId) {
+        await sql`
+          UPDATE clarifications
+          SET telegram_message_id = ${telegramMessageId}
+          WHERE id = (
+            SELECT id FROM clarifications
+            WHERE note_id = ${noteId}
+              AND user_id = ${userId}
+              AND status = 'pending'
+              AND telegram_message_id IS NULL
+            ORDER BY created_at DESC
+            LIMIT 1
+          )
+        `;
+      }
 
       sent++;
       console.log(`[CLARIFICATION] Sent for note: ${noteTitle.slice(0, 40)}`);

@@ -15,62 +15,24 @@ export const dynamic = "force-dynamic";
 
 const DEFAULT_USER_ID = "3d866169-c8db-4d46-beef-dd6fc4daa930";
 
-const GROK_SYSTEM_PROMPT = `You are Grok, Alan's Notes Assistant for notes.sunhomes.io.
+const GROK_SYSTEM_PROMPT = `You are Alan's Notes Assistant for notes.sunhomes.io.
 
-## Your Identity
-- You are the AI powering the notes app enrichment and this Telegram chat
-- You run on the xAI Grok API
-- You're helpful, concise, and proactive about the notes system
+Rules (strict):
+1) Be concise, concrete, and useful. No fluff.
+2) Do NOT ask speculative clarification questions.
+3) Ask at most ONE clarification question only when blocked from answering, and make it specific.
+4) Prefer giving a best-effort answer with what you know.
+5) If uncertain, say what is unknown in one line.
+6) Never invent facts, people, projects, or statuses.
 
-## The Notes App (notes.sunhomes.io)
-A personal knowledge base that stores Alan's notes, synced from Notion.
+Primary jobs:
+- Answer Alan's questions about his notes and projects.
+- Give clear status on sync/enrichment health when asked.
+- Acknowledge “remember this” messages briefly.
 
-**Features:**
-- Notes with title, content, tags, category, project
-- AI enrichment that extracts summaries, people, companies, action items
-- Semantic search via embeddings
-- Knowledge graph linking people/companies to notes
-
-## Your Enrichment Role
-You run daily at 7 AM UTC via a cron job that:
-1. Fetches unenriched notes (batch of 75)
-2. Extracts AI summaries with: oneLiner, keyPoints, peopleAndRoles, companiesMentioned, nextSteps, sentiment
-3. Links people/companies to notes in the database
-4. Creates action items from nextSteps
-5. Sends Telegram clarifications when entities are ambiguous (e.g., "Which Ryan? Kimball or someone else?")
-
-**When you ask for clarification**, I store the response and use it to improve future enrichments.
-
-## Available API Endpoints
-- GET /api/health - Health check
-- GET /api/notes - List notes
-- GET /api/notes/:id - Get single note
-- GET /api/notes/stats - Stats and recent activity
-- POST /api/notes/semantic-search - Search by meaning
-- GET /api/issues - Find problems (missing tags, stalled enrichment)
-- POST /api/cron/daily - Trigger enrichment manually
-
-## Current Schedule
-- **Daily enrichment**: 7 AM UTC (cron job)
-- **Batch size**: 75 notes per run
-- At current rate, ~13 days to process full backlog
-
-## What You Can Help With
-1. **Answer questions** about notes, people, projects mentioned in them
-2. **Explain enrichment status** - how many processed, pending, errors
-3. **Help find information** - "What notes mention Isaac?" or "What's the status of TechRidge?"
-4. **Create quick notes** - If asked to remember something, acknowledge it
-5. **Clarify ambiguities** - When user replies to a clarification question
-6. **Proactively notify** - If you notice issues (like enrichment stalled), mention it
-
-## Communication Style
-- Be concise but helpful
-- Use the recent notes context provided to answer questions
-- If you don't know something specific, say so
-- You can ask clarifying questions when needed
-
-## Current Context
-The user is Alan. He manages multiple projects including real estate (SunHomes, TechRidge), investments (MoneyHeaven), and various business contacts.
+Tone:
+- Calm, practical, direct.
+- Short paragraphs or bullets.
 `;
 
 /**
@@ -119,28 +81,50 @@ export async function POST(request: NextRequest) {
       return handleCommand(text, chatId, botToken);
     }
 
-    // 2. Handle clarification replies
-    if (replyTo?.text?.includes("Clarification") || replyTo?.text?.includes("clarification") || replyTo?.text?.includes("Which")) {
-      const entityMatch = replyTo.text.match(/about\s+"([^"]+)"/i) ||
-                          replyTo.text.match(/Which\s+(\w+)\?/i) ||
-                          replyTo.text.match(/Issue:\s*(.+)/i);
-      if (entityMatch) {
-        const ambiguousEntity = entityMatch[1].trim();
+    // 2. Handle clarification replies deterministically (no regex guessing)
+    if (replyTo?.message_id) {
+      try {
+        const byTelegramId = await sql`
+          SELECT id, note_id, question
+          FROM clarifications
+          WHERE telegram_message_id = ${replyTo.message_id}
+            AND status = 'pending'
+            AND user_id = ${DEFAULT_USER_ID}
+          ORDER BY created_at DESC
+          LIMIT 1
+        `;
 
-        // Store clarification
-        try {
+        const fallbackPending = byTelegramId.length > 0
+          ? byTelegramId
+          : await sql`
+              SELECT id, note_id, question
+              FROM clarifications
+              WHERE status = 'pending'
+                AND user_id = ${DEFAULT_USER_ID}
+              ORDER BY created_at DESC
+              LIMIT 1
+            `;
+
+        if (fallbackPending.length > 0) {
+          const clarification = fallbackPending[0] as { id: string; note_id: string; question: string };
+
           await sql`
-            INSERT INTO entity_clarifications (ambiguous_entity, resolved_to, created_at)
-            VALUES (${ambiguousEntity}, ${text}, NOW())
-            ON CONFLICT DO NOTHING
+            UPDATE clarifications
+            SET answer = ${text},
+                status = 'answered',
+                answered_at = NOW()
+            WHERE id = ${clarification.id}
           `;
-          console.log(`[WEBHOOK] Stored clarification: "${ambiguousEntity}" -> "${text}"`);
-        } catch (e) {
-          console.warn("[WEBHOOK] Failed to store clarification:", e);
-        }
 
-        await sendMessage(chatId, `Got it! I'll remember that "${ambiguousEntity}" refers to "${text}". This will help with future note enrichment.`, botToken);
-        return NextResponse.json({ ok: true });
+          await sendMessage(
+            chatId,
+            `Thanks — saved your clarification for note ${clarification.note_id}.`,
+            botToken
+          );
+          return NextResponse.json({ ok: true });
+        }
+      } catch (e) {
+        console.warn("[WEBHOOK] Failed handling clarification reply:", e);
       }
     }
 
@@ -170,9 +154,11 @@ export async function POST(request: NextRequest) {
         LIMIT 20
       `;
       // Reverse to get chronological order (oldest first)
-      conversationHistory = (history as any[]).reverse().map(h => ({
+      conversationHistory = (
+        history as Array<{ role: string; content: string }>
+      ).reverse().map((h) => ({
         role: h.role,
-        content: h.content
+        content: h.content,
       }));
     } catch (e) {
       console.warn("[WEBHOOK] Failed to load history:", e);
@@ -186,7 +172,11 @@ export async function POST(request: NextRequest) {
         COUNT(*) FILTER (WHERE enriched_at IS NULL) as pending
       FROM notes
     `;
-    const stats = statsResult[0] as any;
+    const stats = statsResult[0] as { total: string; enriched: string; pending: string };
+    const totalNotes = parseInt(stats.total || "0", 10);
+    const enrichedNotes = parseInt(stats.enriched || "0", 10);
+    const pendingNotes = parseInt(stats.pending || "0", 10);
+    const enrichedPct = totalNotes > 0 ? Math.round((enrichedNotes / totalNotes) * 100) : 0;
 
     // Get recent notes for context
     const recentNotes = await sql`
@@ -197,35 +187,38 @@ export async function POST(request: NextRequest) {
     `;
 
     const notesContext = recentNotes.length > 0
-      ? recentNotes.map((n: any) => {
-          const summary = n.ai_summary ? JSON.parse(n.ai_summary)?.oneLiner : null;
-          return `- "${n.title}" ${n.project ? `[${n.project}]` : ''}: ${summary || n.content?.slice(0, 80) + '...'}`;
+      ? (recentNotes as Array<{
+          title: string;
+          content: string;
+          tags: string[] | null;
+          project: string | null;
+          ai_summary: string | null;
+        }>).map((n) => {
+          const parsedSummary = n.ai_summary
+            ? (JSON.parse(n.ai_summary) as { oneLiner?: string })
+            : null;
+          const summary = parsedSummary?.oneLiner || null;
+          return `- "${n.title}" ${n.project ? `[${n.project}]` : ''}: ${summary || `${(n.content || '').slice(0, 80)}...`}`;
         }).join('\n')
       : "No recent notes.";
 
-    // Get pending clarifications (table may not exist yet)
-    let pendingClarifications: any[] = [];
-    try {
-      pendingClarifications = await sql`
-        SELECT ambiguous_entity, context FROM enrichment_clarifications
-        WHERE status = 'pending'
-        ORDER BY created_at DESC
-        LIMIT 3
-      `;
-    } catch {
-      // Table doesn't exist yet, skip
-    }
-
-    const clarificationsContext = pendingClarifications.length > 0
-      ? `\n\n**Pending clarifications I need:**\n${pendingClarifications.map((c: any) => `- "${c.ambiguous_entity}": ${c.context || 'Who/what is this?'}`).join('\n')}`
-      : '';
+    const pendingClarificationsResult = await sql`
+      SELECT COUNT(*) as count
+      FROM clarifications
+      WHERE status = 'pending'
+        AND user_id = ${DEFAULT_USER_ID}
+    `;
+    const pendingClarifications = parseInt(
+      (pendingClarificationsResult[0] as { count: string }).count || '0',
+      10
+    );
 
     const dynamicContext = `
 ## Current Status
-- Total notes: ${stats.total}
-- Enriched: ${stats.enriched} (${Math.round((stats.enriched / stats.total) * 100)}%)
-- Pending: ${stats.pending}
-${clarificationsContext}
+- Total notes: ${totalNotes}
+- Enriched: ${enrichedNotes} (${enrichedPct}%)
+- Pending enrichment: ${pendingNotes}
+- Pending clarifications: ${pendingClarifications}
 
 ## Recent Notes
 ${notesContext}
@@ -249,6 +242,8 @@ ${notesContext}
       // Add current user message
       messages.push({ role: "user", content: text });
 
+      const chatModel = process.env.TELEGRAM_BOT_MODEL || "grok-4-1-fast-reasoning";
+
       const grokResponse = await fetch("https://api.x.ai/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -256,9 +251,10 @@ ${notesContext}
           "Authorization": `Bearer ${xaiApiKey}`,
         },
         body: JSON.stringify({
-          model: "grok-4-1-fast-reasoning",
+          model: chatModel,
           messages,
-          max_tokens: 800,
+          max_tokens: 450,
+          temperature: 0.2,
         }),
       });
 
@@ -328,19 +324,29 @@ async function handleCommand(text: string, chatId: number, botToken: string) {
       );
       break;
 
-    case "/status":
+    case "/status": {
       const stats = await getStats();
-      const daysRemaining = Math.ceil(stats.pending / 75);
+      const queue = await sql`
+        SELECT
+          COUNT(*) FILTER (WHERE status = 'pending') as pending,
+          COUNT(*) FILTER (WHERE status = 'processing') as processing,
+          COUNT(*) FILTER (WHERE status = 'failed') as failed
+        FROM enrichment_queue
+      `;
+      const q = queue[0] as { pending: string; processing: string; failed: string };
       await sendMessage(chatId,
         `Enrichment Status\n\n` +
-        `Total: ${stats.total}\n` +
+        `Total notes: ${stats.total}\n` +
         `Enriched: ${stats.enriched} (${stats.percent}%)\n` +
-        `Pending: ${stats.pending}\n\n` +
-        `At 75/day, ~${daysRemaining} days to complete.\n` +
-        `Next run: 7 AM UTC daily`,
+        `Pending enrichment: ${stats.pending}\n\n` +
+        `Queue pending: ${q.pending}\n` +
+        `Queue processing: ${q.processing}\n` +
+        `Queue failed: ${q.failed}\n\n` +
+        `Cron schedule: every 5 minutes.`,
         botToken
       );
       break;
+    }
 
     case "/issues":
       const issues = await getIssues();
@@ -351,7 +357,7 @@ async function handleCommand(text: string, chatId: number, botToken: string) {
       try {
         await sql`DELETE FROM telegram_messages WHERE chat_id = ${chatId}`;
         await sendMessage(chatId, "Memory cleared! Starting fresh.", botToken);
-      } catch (e) {
+      } catch {
         await sendMessage(chatId, "Failed to clear memory.", botToken);
       }
       break;
@@ -361,9 +367,9 @@ async function handleCommand(text: string, chatId: number, botToken: string) {
         const countResult = await sql`
           SELECT COUNT(*) as count FROM telegram_messages WHERE chat_id = ${chatId}
         `;
-        const count = (countResult[0] as any)?.count || 0;
+        const count = (countResult[0] as { count: string } | undefined)?.count || 0;
         await sendMessage(chatId, `Memory: ${count} messages stored.\n\nUse /clear to reset.`, botToken);
-      } catch (e) {
+      } catch {
         await sendMessage(chatId, "Memory: Unable to check.", botToken);
       }
       break;
@@ -400,9 +406,9 @@ async function getStats() {
       COUNT(*) FILTER (WHERE enriched_at IS NOT NULL) as enriched
     FROM notes
   `;
-  const row = result[0] as any;
-  const total = parseInt(row?.total || "0");
-  const enriched = parseInt(row?.enriched || "0");
+  const row = result[0] as { total: string; enriched: string } | undefined;
+  const total = parseInt(row?.total || "0", 10);
+  const enriched = parseInt(row?.enriched || "0", 10);
 
   return {
     total,
@@ -424,9 +430,9 @@ async function getIssues() {
     AND created_at < NOW() - INTERVAL '48 hours'
   `;
 
-  const noTagsCount = (noTags[0] as any)?.c || 0;
-  const noCategoryCount = (noCategory[0] as any)?.c || 0;
-  const stalledCount = (stalled[0] as any)?.c || 0;
+  const noTagsCount = (noTags[0] as { c: string } | undefined)?.c || 0;
+  const noCategoryCount = (noCategory[0] as { c: string } | undefined)?.c || 0;
+  const stalledCount = (stalled[0] as { c: string } | undefined)?.c || 0;
 
   if (noTagsCount === 0 && noCategoryCount === 0 && stalledCount === 0) {
     return "No issues found! Everything looks good.";
@@ -442,7 +448,7 @@ async function getIssues() {
 export async function GET() {
   return NextResponse.json({
     status: "active",
-    message: "Grok-powered webhook",
-    model: "grok-4-1-fast-reasoning"
+    message: "Notes assistant webhook",
+    model: process.env.TELEGRAM_BOT_MODEL || "grok-4-1-fast-reasoning",
   });
 }
