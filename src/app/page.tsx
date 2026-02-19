@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getNotesWithEntities, getCategories } from "@/lib/db";
+import { getNotesWithEntities, getCategories, getProjectsWithCounts } from "@/lib/db";
 import { getAuthUserId } from "@/lib/auth";
 import { AppShell } from "@/components/notes/app-shell";
 
@@ -11,10 +11,11 @@ export default async function HomePage() {
     redirect("/login");
   }
 
-  const [notes, categories] = await Promise.all([
+  const [notes, categories, projects] = await Promise.all([
     getNotesWithEntities(userId, undefined, undefined, { limit: 50 }),
     getCategories(userId),
+    getProjectsWithCounts(userId),
   ]);
 
-  return <AppShell initialNotes={notes} categories={categories} />;
+  return <AppShell initialNotes={notes} categories={categories} initialProjects={projects} />;
 }

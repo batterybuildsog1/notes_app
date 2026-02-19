@@ -51,6 +51,7 @@ export async function GET(request: NextRequest) {
     const personId = searchParams.get("person") || undefined;
     const companyId = searchParams.get("company") || undefined;
     const projectId = searchParams.get("project") || undefined;
+    const source = searchParams.get("source") || undefined;
 
     // Single query path for main list + entity filters (no N+1)
     const notesWithEntities: NoteWithEntities[] = await getNotesWithEntities(
@@ -63,6 +64,7 @@ export async function GET(request: NextRequest) {
         personId,
         companyId,
         projectId,
+        source,
       }
     );
 
@@ -97,7 +99,7 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
     let { title, content, category, tags } = body;
-    const { priority, project, original_created_at, original_updated_at, templateId } = body;
+    const { priority, project, source, original_created_at, original_updated_at, templateId } = body;
 
     // If templateId provided, load template and use as defaults
     if (templateId) {
@@ -152,6 +154,7 @@ export async function POST(request: NextRequest) {
       tags: Array.isArray(tags) ? tags.map((t: string) => t.trim()) : undefined,
       priority: priority?.trim(),
       project: project?.trim(),
+      source: source?.trim(),
       original_created_at: original_created_at || undefined,
       original_updated_at: original_updated_at || undefined,
     });

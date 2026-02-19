@@ -160,6 +160,7 @@ export async function getNotesWithEntities(
     personId?: string;
     companyId?: string;
     projectId?: string;
+    source?: string;
   }
 ): Promise<NoteWithEntities[]> {
   const hasSearch = search && search.trim().length > 0;
@@ -201,6 +202,7 @@ export async function getNotesWithEntities(
       ${options?.personId ? sql`AND EXISTS (SELECT 1 FROM note_people xnp WHERE xnp.note_id = n.id AND xnp.person_id = ${options.personId})` : sql``}
       ${options?.companyId ? sql`AND EXISTS (SELECT 1 FROM note_companies xnc WHERE xnc.note_id = n.id AND xnc.company_id = ${options.companyId})` : sql``}
       ${options?.projectId ? sql`AND EXISTS (SELECT 1 FROM note_projects xpr WHERE xpr.note_id = n.id AND xpr.project_id = ${options.projectId})` : sql``}
+      ${options?.source ? sql`AND n.source = ${options.source}` : sql``}
     GROUP BY n.id
     ORDER BY COALESCE(n.original_updated_at, n.updated_at) DESC
     LIMIT ${limit} OFFSET ${offset}
@@ -228,11 +230,12 @@ export async function createNote(data: {
   tags?: string[];
   priority?: string;
   project?: string;
+  source?: string;
   original_created_at?: string | Date;
   original_updated_at?: string | Date;
 }): Promise<Note> {
   const tagsArray = data.tags && data.tags.length > 0 ? data.tags : null;
-  const originalCreatedAt = data.original_created_at 
+  const originalCreatedAt = data.original_created_at
     ? (typeof data.original_created_at === 'string' ? data.original_created_at : data.original_created_at.toISOString())
     : null;
   const originalUpdatedAt = data.original_updated_at
@@ -240,7 +243,7 @@ export async function createNote(data: {
     : null;
 
   const rows = await sql`
-    INSERT INTO notes (title, content, user_id, category, tags, priority, project, created_at, updated_at, original_created_at, original_updated_at)
+    INSERT INTO notes (title, content, user_id, category, tags, priority, project, source, created_at, updated_at, original_created_at, original_updated_at)
     VALUES (
       ${data.title},
       ${data.content},
@@ -249,6 +252,7 @@ export async function createNote(data: {
       ${tagsArray},
       ${data.priority || null},
       ${data.project || null},
+      ${data.source || null},
       NOW(),
       NOW(),
       ${originalCreatedAt},
@@ -636,13 +640,20 @@ export async function getCompaniesWithCounts(
 /**
  * Get all projects for a user with note counts
  */
+export interface ProjectWithCounts extends Project {
+  noteCount: number;
+  lastNoteUpdatedAt: Date | null;
+}
+
 export async function getProjectsWithCounts(
   userId: string
-): Promise<(Project & { noteCount: number })[]> {
+): Promise<ProjectWithCounts[]> {
   const rows = await sql`
-    SELECT pr.*, COUNT(nprj.note_id) as note_count
+    SELECT pr.*, COUNT(nprj.note_id) as note_count,
+      MAX(COALESCE(n.original_updated_at, n.updated_at)) as last_note_updated_at
     FROM projects pr
     LEFT JOIN note_projects nprj ON nprj.project_id = pr.id
+    LEFT JOIN notes n ON n.id = nprj.note_id
     WHERE pr.user_id = ${userId}
     GROUP BY pr.id
     ORDER BY note_count DESC, pr.name
@@ -650,6 +661,7 @@ export async function getProjectsWithCounts(
   return rows.map((r) => ({
     ...(r as Project),
     noteCount: parseInt((r as { note_count: string }).note_count),
+    lastNoteUpdatedAt: (r as { last_note_updated_at: Date | null }).last_note_updated_at,
   }));
 }
 

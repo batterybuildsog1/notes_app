@@ -5,6 +5,10 @@ import { useRouter } from "next/navigation";
 import { signOut, useSession } from "@/lib/auth-client";
 import { Sidebar, SidebarToggle } from "./sidebar";
 import { NoteEditor } from "./note-editor";
+import { ProjectBar } from "./project-bar";
+import { AgentBar } from "./agent-bar";
+import { ProjectView } from "./project-view";
+import { AgentView } from "./agent-view";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -14,14 +18,18 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { User, LogOut, Moon, Sun, FileText } from "lucide-react";
 import { searchNotes } from "@/lib/search";
-import type { Note, NoteWithEntities } from "@/lib/db";
+import { getAgentById } from "@/lib/agents";
+import type { Note, NoteWithEntities, ProjectWithCounts } from "@/lib/db";
+
+type ActiveView = "notes" | "project" | "agent";
 
 interface AppShellProps {
   initialNotes: NoteWithEntities[];
   categories: string[];
+  initialProjects: ProjectWithCounts[];
 }
 
-export function AppShell({ initialNotes, categories: initialCategories }: AppShellProps) {
+export function AppShell({ initialNotes, categories: initialCategories, initialProjects }: AppShellProps) {
   const router = useRouter();
   const { data: session } = useSession();
 
@@ -33,6 +41,12 @@ export function AppShell({ initialNotes, categories: initialCategories }: AppShe
   const [searchQuery, setSearchQuery] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
+  // View state
+  const [activeView, setActiveView] = useState<ActiveView>("notes");
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
+  const [projects, setProjects] = useState<ProjectWithCounts[]>(initialProjects);
+
   // Theme state
   const [isDark, setIsDark] = useState(false);
 
@@ -40,23 +54,36 @@ export function AppShell({ initialNotes, categories: initialCategories }: AppShe
     setIsDark(document.documentElement.classList.contains("dark"));
   }, []);
 
-  // Parse URL on mount to open a note if specified
+  // Parse URL on mount
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const noteId = params.get("note");
-    if (noteId) {
+    const view = params.get("view");
+    const id = params.get("id");
+
+    if (view === "project" && id) {
+      setActiveView("project");
+      setActiveProjectId(id);
+    } else if (view === "agent" && id) {
+      setActiveView("agent");
+      setActiveAgentId(id);
+    } else if (noteId) {
       setActiveNoteId(noteId);
     }
   }, []);
 
-  // Update URL when active note changes
+  // Update URL when view/note changes
   useEffect(() => {
-    if (activeNoteId) {
+    if (activeView === "project" && activeProjectId) {
+      window.history.replaceState(null, "", `/?view=project&id=${activeProjectId}`);
+    } else if (activeView === "agent" && activeAgentId) {
+      window.history.replaceState(null, "", `/?view=agent&id=${activeAgentId}`);
+    } else if (activeNoteId) {
       window.history.replaceState(null, "", `/?note=${activeNoteId}`);
     } else {
       window.history.replaceState(null, "", "/");
     }
-  }, [activeNoteId]);
+  }, [activeView, activeProjectId, activeAgentId, activeNoteId]);
 
   // Filter notes for sidebar display
   const filteredNotes = useMemo(() => {
@@ -76,13 +103,54 @@ export function AppShell({ initialNotes, categories: initialCategories }: AppShe
     return notes.find((n) => n.id === activeNoteId);
   }, [notes, activeNoteId]);
 
+  // Active project object
+  const activeProject = useMemo(() => {
+    if (!activeProjectId) return undefined;
+    return projects.find((p) => p.id === activeProjectId);
+  }, [projects, activeProjectId]);
+
+  // Active agent config
+  const activeAgent = useMemo(() => {
+    if (!activeAgentId) return undefined;
+    return getAgentById(activeAgentId);
+  }, [activeAgentId]);
+
   // Handlers
   const handleSelectNote = useCallback((noteId: string) => {
     setActiveNoteId(noteId);
+    setActiveView("notes");
+  }, []);
+
+  const handleSelectProject = useCallback((projectId: string | null) => {
+    if (projectId) {
+      setActiveProjectId(projectId);
+      setActiveAgentId(null);
+      setActiveNoteId(null);
+      setActiveView("project");
+    } else {
+      setActiveProjectId(null);
+      setActiveView("notes");
+    }
+  }, []);
+
+  const handleSelectAgent = useCallback((agentId: string | null) => {
+    if (agentId) {
+      setActiveAgentId(agentId);
+      setActiveProjectId(null);
+      setActiveNoteId(null);
+      setActiveView("agent");
+    } else {
+      setActiveAgentId(null);
+      setActiveView("notes");
+    }
+  }, []);
+
+  const handleNoteFromView = useCallback((noteId: string) => {
+    setActiveNoteId(noteId);
+    setActiveView("notes");
   }, []);
 
   const handleNewNote = useCallback(async () => {
-    // Create a blank note immediately via POST
     try {
       const response = await fetch("/api/notes", {
         method: "POST",
@@ -93,6 +161,7 @@ export function AppShell({ initialNotes, categories: initialCategories }: AppShe
         const newNote: NoteWithEntities = await response.json();
         setNotes((prev) => [newNote, ...prev]);
         setActiveNoteId(newNote.id);
+        setActiveView("notes");
       }
     } catch (error) {
       console.error("Failed to create note:", error);
@@ -100,8 +169,6 @@ export function AppShell({ initialNotes, categories: initialCategories }: AppShe
   }, []);
 
   const handleNoteCreated = useCallback((note: Note) => {
-    // Note was created from the editor (typed into a blank editor)
-    // Add to notes list if not already there
     setNotes((prev) => {
       if (prev.some((n) => n.id === note.id)) return prev;
       return [note as NoteWithEntities, ...prev];
@@ -118,8 +185,6 @@ export function AppShell({ initialNotes, categories: initialCategories }: AppShe
             : n
         )
       );
-      // Update categories if new one was detected
-      // (We'll do a lightweight refresh of categories periodically)
     },
     []
   );
@@ -155,7 +220,7 @@ export function AppShell({ initialNotes, categories: initialCategories }: AppShe
     router.refresh();
   };
 
-  // Refresh notes list from server (e.g., after category changes from enrichment)
+  // Refresh notes list from server
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
@@ -164,7 +229,6 @@ export function AppShell({ initialNotes, categories: initialCategories }: AppShe
         if (res.ok) {
           const freshNotes: NoteWithEntities[] = await res.json();
           setNotes(freshNotes);
-          // Extract categories from fresh data
           const cats = new Set<string>();
           freshNotes.forEach((n) => {
             if (n.category) cats.add(n.category);
@@ -175,79 +239,116 @@ export function AppShell({ initialNotes, categories: initialCategories }: AppShe
       } catch {
         // Silent fail on background refresh
       }
-    }, 60000); // Every 60s
+    }, 60000);
     return () => clearInterval(interval);
   }, []);
 
+  // Whether we're showing a project/agent view (hides sidebar+editor)
+  const showingView = activeView === "project" || activeView === "agent";
+
   return (
     <div className="h-screen flex flex-col bg-background">
-      {/* Top bar */}
-      <header className="h-12 border-b flex items-center justify-between px-3 shrink-0 bg-background/95 backdrop-blur z-30">
-        <div className="flex items-center gap-2">
-          <SidebarToggle onClick={() => setSidebarOpen(true)} />
-          <span className="text-sm font-medium hidden md:inline">Notes</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={toggleTheme}>
-            {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
-                <User className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {session?.user && (
-                <DropdownMenuItem disabled className="text-muted-foreground text-xs">
-                  {session.user.email}
+      {/* Row 1: Project bar + utility icons */}
+      <header className="border-b shrink-0 bg-background/95 backdrop-blur z-30">
+        <div className="flex items-center justify-between h-10">
+          <div className="flex items-center gap-1 min-w-0 flex-1">
+            <SidebarToggle onClick={() => setSidebarOpen(true)} />
+            <ProjectBar
+              projects={projects}
+              activeProjectId={activeView === "project" ? activeProjectId : null}
+              onSelectProject={handleSelectProject}
+            />
+          </div>
+          <div className="flex items-center gap-1 shrink-0 pr-2">
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={toggleTheme}>
+              {isDark ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-7 w-7">
+                  <User className="h-3.5 w-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {session?.user && (
+                  <DropdownMenuItem disabled className="text-muted-foreground text-xs">
+                    {session.user.email}
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem onClick={handleSignOut}>
+                  <LogOut className="h-4 w-4 mr-2" />
+                  Sign out
                 </DropdownMenuItem>
-              )}
-              <DropdownMenuItem onClick={handleSignOut}>
-                <LogOut className="h-4 w-4 mr-2" />
-                Sign out
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </div>
+
+        {/* Row 2: Agent bar */}
+        <div className="border-t">
+          <AgentBar
+            activeAgentId={activeView === "agent" ? activeAgentId : null}
+            onSelectAgent={handleSelectAgent}
+          />
         </div>
       </header>
 
       {/* Main content area */}
       <div className="flex flex-1 overflow-hidden">
-        <Sidebar
-          notes={filteredNotes}
-          categories={categories}
-          activeNoteId={activeNoteId}
-          onSelectNote={handleSelectNote}
-          onNewNote={handleNewNote}
-          categoryFilter={categoryFilter}
-          onCategoryFilter={handleCategoryFilter}
-          searchQuery={searchQuery}
-          onSearch={handleSearch}
-          isOpen={sidebarOpen}
-          onClose={() => setSidebarOpen(false)}
-        />
-
-        {/* Main editor area */}
-        <main className="flex-1 overflow-hidden">
-          {activeNote || activeNoteId ? (
-            <NoteEditor
-              key={activeNoteId}
-              note={activeNote}
-              onSave={handleNoteSaved}
-              onDelete={handleNoteDeleted}
-              onCreate={handleNoteCreated}
+        {showingView ? (
+          // Project or Agent view — full width
+          <main className="flex-1 overflow-hidden">
+            {activeView === "project" && activeProject && (
+              <ProjectView
+                project={activeProject}
+                onSelectNote={handleNoteFromView}
+              />
+            )}
+            {activeView === "agent" && activeAgent && (
+              <AgentView
+                agent={activeAgent}
+                onSelectNote={handleNoteFromView}
+              />
+            )}
+          </main>
+        ) : (
+          // Default sidebar + editor layout
+          <>
+            <Sidebar
+              notes={filteredNotes}
+              categories={categories}
+              activeNoteId={activeNoteId}
+              onSelectNote={handleSelectNote}
+              onNewNote={handleNewNote}
+              categoryFilter={categoryFilter}
+              onCategoryFilter={handleCategoryFilter}
+              searchQuery={searchQuery}
+              onSearch={handleSearch}
+              isOpen={sidebarOpen}
+              onClose={() => setSidebarOpen(false)}
             />
-          ) : (
-            <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-3">
-              <FileText className="h-12 w-12 opacity-20" />
-              <p className="text-lg">Select a note or create a new one</p>
-              <p className="text-sm">
-                Click <strong>+ New Note</strong> in the sidebar to get started
-              </p>
-            </div>
-          )}
-        </main>
+
+            <main className="flex-1 overflow-hidden">
+              {activeNote || activeNoteId ? (
+                <NoteEditor
+                  key={activeNoteId}
+                  note={activeNote}
+                  onSave={handleNoteSaved}
+                  onDelete={handleNoteDeleted}
+                  onCreate={handleNoteCreated}
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-3">
+                  <FileText className="h-12 w-12 opacity-20" />
+                  <p className="text-lg">Select a note or create a new one</p>
+                  <p className="text-sm">
+                    Click <strong>+ New Note</strong> in the sidebar to get started
+                  </p>
+                </div>
+              )}
+            </main>
+          </>
+        )}
       </div>
     </div>
   );
