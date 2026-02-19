@@ -1,71 +1,127 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { X, ArrowLeft, Check, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { X, Check, Loader2, AlertCircle, Trash2 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import type { Note } from "@/lib/db";
 
 interface NoteEditorProps {
   note?: Note;
-  inline?: boolean;
+  /** Callback when note is saved (title/content changed) — used by AppShell to update sidebar */
+  onSave?: (note: { id: string; title: string; content: string; tags: string[] | null; updated_at: Date }) => void;
+  /** Callback when note is deleted */
+  onDelete?: (noteId: string) => void;
+  /** Callback when a new note is created (returns the new note ID) */
+  onCreate?: (note: Note) => void;
 }
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
-export function NoteEditor({ note, inline = false }: NoteEditorProps) {
-  const router = useRouter();
+export function NoteEditor({ note, onSave, onDelete, onCreate }: NoteEditorProps) {
   const [title, setTitle] = useState(note?.title || "");
   const [content, setContent] = useState(note?.content || "");
   const [tags, setTags] = useState<string[]>(note?.tags || []);
   const [tagInput, setTagInput] = useState("");
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Auto-save state
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [currentNoteId, setCurrentNoteId] = useState(note?.id);
-  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const lastSavedRef = useRef({ title: note?.title || "", content: note?.content || "" });
-
-  // Track if a creation request is already in-flight to prevent duplicates
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const periodicTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSavedRef = useRef({
+    title: note?.title || "",
+    content: note?.content || "",
+    tags: JSON.stringify(note?.tags || []),
+  });
   const isCreatingRef = useRef(false);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  // Keep current values in refs for sendBeacon/periodic save access
+  const currentValuesRef = useRef({ title: note?.title || "", content: note?.content || "", tags: note?.tags || [] as string[] });
+  const currentNoteIdRef = useRef(note?.id);
 
-  // Auto-save function with optimistic UI (handles both create and update)
-  const performAutoSave = useCallback(async () => {
-    // Need at least a title to save
-    if (!title.trim()) return;
+  // Sync note prop changes (when switching notes in sidebar)
+  useEffect(() => {
+    setTitle(note?.title || "");
+    setContent(note?.content || "");
+    setTags(note?.tags || []);
+    setTagInput("");
+    setCurrentNoteId(note?.id);
+    currentNoteIdRef.current = note?.id;
+    setSaveStatus("idle");
+    isCreatingRef.current = false;
+    lastSavedRef.current = {
+      title: note?.title || "",
+      content: note?.content || "",
+      tags: JSON.stringify(note?.tags || []),
+    };
+    currentValuesRef.current = { title: note?.title || "", content: note?.content || "", tags: note?.tags || [] };
+    // Focus title for new notes
+    if (!note?.id) {
+      setTimeout(() => titleInputRef.current?.focus(), 50);
+    }
+  }, [note?.id, note?.title, note?.content, note?.tags]);
 
-    // For new notes: auto-create via POST
-    if (!currentNoteId) {
-      // Prevent duplicate creation requests
+  // Keep refs in sync with state
+  useEffect(() => {
+    currentValuesRef.current = { title, content, tags };
+  }, [title, content, tags]);
+
+  useEffect(() => {
+    currentNoteIdRef.current = currentNoteId;
+  }, [currentNoteId]);
+
+  const hasChanges = useCallback(() => {
+    const saved = lastSavedRef.current;
+    return (
+      currentValuesRef.current.title !== saved.title ||
+      currentValuesRef.current.content !== saved.content ||
+      JSON.stringify(currentValuesRef.current.tags) !== saved.tags
+    );
+  }, []);
+
+  // Core save function
+  const performSave = useCallback(async () => {
+    const { title: t, content: c, tags: tg } = currentValuesRef.current;
+    const noteId = currentNoteIdRef.current;
+
+    // For new notes: POST to create
+    if (!noteId) {
       if (isCreatingRef.current) return;
       isCreatingRef.current = true;
-
       setSaveStatus("saving");
       try {
         const response = await fetch("/api/notes", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            title,
-            content,
-            tags: tags.length > 0 ? tags : null,
+            title: t || "Untitled",
+            content: c,
+            tags: tg.length > 0 ? tg : null,
           }),
         });
-
         if (response.ok) {
           const savedNote = await response.json();
           setCurrentNoteId(savedNote.id);
-          lastSavedRef.current = { title, content };
-          setHasUnsavedChanges(false);
+          currentNoteIdRef.current = savedNote.id;
+          lastSavedRef.current = { title: t, content: c, tags: JSON.stringify(tg) };
           setSaveStatus("saved");
           setTimeout(() => setSaveStatus("idle"), 1500);
-          // Update URL so refreshing stays on this note
-          window.history.replaceState(null, "", `/notes/${savedNote.id}`);
-          router.refresh();
+          onCreate?.(savedNote);
         } else {
           setSaveStatus("error");
         }
@@ -77,80 +133,136 @@ export function NoteEditor({ note, inline = false }: NoteEditorProps) {
       return;
     }
 
-    // For existing notes: auto-save via PUT
-    // Skip if nothing changed
-    if (title === lastSavedRef.current.title && content === lastSavedRef.current.content) {
-      setHasUnsavedChanges(false);
-      return;
-    }
+    // For existing notes: check if changed
+    if (!hasChanges()) return;
 
-    // Optimistic: show saved immediately
-    setSaveStatus("saved");
-    lastSavedRef.current = { title, content };
-    setHasUnsavedChanges(false);
-
+    setSaveStatus("saving");
     try {
-      const response = await fetch(`/api/notes/${currentNoteId}`, {
+      const response = await fetch(`/api/notes/${noteId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title,
-          content,
-          tags: tags.length > 0 ? tags : null,
+          title: t,
+          content: c,
+          tags: tg.length > 0 ? tg : null,
         }),
       });
-
       if (response.ok) {
-        // Reset to idle after 1.5 seconds
+        // Only update lastSaved after server confirms
+        lastSavedRef.current = { title: t, content: c, tags: JSON.stringify(tg) };
+        setSaveStatus("saved");
         setTimeout(() => setSaveStatus("idle"), 1500);
+        onSave?.({
+          id: noteId,
+          title: t,
+          content: c,
+          tags: tg.length > 0 ? tg : null,
+          updated_at: new Date(),
+        });
       } else {
         setSaveStatus("error");
+        // Retry once after 2s
+        retryTimerRef.current = setTimeout(async () => {
+          try {
+            const retryRes = await fetch(`/api/notes/${noteId}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ title: t, content: c, tags: tg.length > 0 ? tg : null }),
+            });
+            if (retryRes.ok) {
+              lastSavedRef.current = { title: t, content: c, tags: JSON.stringify(tg) };
+              setSaveStatus("saved");
+              setTimeout(() => setSaveStatus("idle"), 1500);
+              onSave?.({ id: noteId, title: t, content: c, tags: tg.length > 0 ? tg : null, updated_at: new Date() });
+            }
+          } catch {
+            // Stay in error state — user can see the error indicator
+          }
+        }, 2000);
       }
     } catch {
       setSaveStatus("error");
+      // Retry once after 2s
+      retryTimerRef.current = setTimeout(async () => {
+        try {
+          const retryRes = await fetch(`/api/notes/${noteId}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: t, content: c, tags: tg.length > 0 ? tg : null }),
+          });
+          if (retryRes.ok) {
+            lastSavedRef.current = { title: t, content: c, tags: JSON.stringify(tg) };
+            setSaveStatus("saved");
+            setTimeout(() => setSaveStatus("idle"), 1500);
+            onSave?.({ id: noteId, title: t, content: c, tags: tg.length > 0 ? tg : null, updated_at: new Date() });
+          }
+        } catch {
+          // Stay in error state
+        }
+      }, 2000);
     }
-  }, [currentNoteId, title, content, tags, router]);
+  }, [hasChanges, onSave, onCreate]);
 
-  // Debounced auto-save effect (works for both new and existing notes)
+  // Debounced auto-save on content change (500ms)
   useEffect(() => {
-    // For new notes: need at least a title to trigger auto-create
-    if (!currentNoteId && !title.trim()) return;
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    if (!hasChanges() && currentNoteIdRef.current) return;
+    // For new notes, don't auto-create until there's some content or title
+    if (!currentNoteIdRef.current && !title.trim() && !content.trim()) return;
 
-    // Check if content changed
-    const hasChanges = title !== lastSavedRef.current.title || content !== lastSavedRef.current.content;
-    setHasUnsavedChanges(hasChanges);
-
-    if (!hasChanges) return;
-
-    // Clear existing timer
-    if (autoSaveTimerRef.current) {
-      clearTimeout(autoSaveTimerRef.current);
-    }
-
-    // Set new timer (500ms debounce for near-instant feel)
     autoSaveTimerRef.current = setTimeout(() => {
-      performAutoSave();
+      performSave();
     }, 500);
 
     return () => {
-      if (autoSaveTimerRef.current) {
-        clearTimeout(autoSaveTimerRef.current);
-      }
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     };
-  }, [title, content, currentNoteId, performAutoSave]);
+  }, [title, content, tags, performSave, hasChanges]);
 
-  // Warn on navigation with unsaved changes
+  // Periodic save every 30s as safety net
   useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (hasUnsavedChanges) {
-        e.preventDefault();
-        e.returnValue = "";
+    periodicTimerRef.current = setInterval(() => {
+      if (hasChanges() && currentNoteIdRef.current) {
+        performSave();
       }
+    }, 5000);
+    return () => {
+      if (periodicTimerRef.current) clearInterval(periodicTimerRef.current);
+    };
+  }, [performSave, hasChanges]);
+
+  // sendBeacon on beforeunload to flush pending saves
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      const noteId = currentNoteIdRef.current;
+      if (!noteId) return;
+      const saved = lastSavedRef.current;
+      const current = currentValuesRef.current;
+      if (
+        current.title === saved.title &&
+        current.content === saved.content &&
+        JSON.stringify(current.tags) === saved.tags
+      ) return;
+
+      // Use sendBeacon to flush the save
+      const data = JSON.stringify({
+        title: current.title,
+        content: current.content,
+        tags: current.tags.length > 0 ? current.tags : null,
+      });
+      navigator.sendBeacon(`/api/notes/${noteId}`, new Blob([data], { type: "application/json" }));
     };
 
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [hasUnsavedChanges]);
+  }, []);
+
+  // Cleanup timers
+  useEffect(() => {
+    return () => {
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
+  }, []);
 
   const handleAddTag = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter" && tagInput.trim()) {
@@ -166,92 +278,125 @@ export function NoteEditor({ note, inline = false }: NoteEditorProps) {
     setTags(tags.filter((tag) => tag !== tagToRemove));
   };
 
-  // Handle back navigation with unsaved changes warning
-  const handleBack = () => {
-    if (hasUnsavedChanges) {
-      const confirmed = window.confirm("You have unsaved changes. Are you sure you want to leave?");
-      if (!confirmed) return;
+  const handleDelete = async () => {
+    if (!currentNoteId) return;
+    setIsDeleting(true);
+    try {
+      const response = await fetch(`/api/notes/${currentNoteId}`, { method: "DELETE" });
+      if (response.ok) {
+        onDelete?.(currentNoteId);
+      }
+    } catch (error) {
+      console.error("Error deleting note:", error);
+    } finally {
+      setIsDeleting(false);
+      setDeleteOpen(false);
     }
-    router.back();
+  };
+
+  const handleManualRetry = () => {
+    setSaveStatus("idle");
+    performSave();
   };
 
   return (
-    <div className="space-y-4">
-      {/* Header with save status and actions */}
-      <div className="flex items-center justify-between gap-4">
-        {!inline && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleBack}
-          >
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back
-          </Button>
-        )}
-        <div className={`flex items-center gap-3 ${inline ? "ml-auto" : ""}`}>
-          {/* Save status indicator */}
+    <div className="flex flex-col h-full">
+      {/* Top bar with save status and actions */}
+      <div className="flex items-center justify-between gap-4 px-4 py-2 border-b shrink-0">
+        <div className="flex items-center gap-2 text-sm">
           {saveStatus === "saving" && (
-            <span className="text-sm text-muted-foreground flex items-center gap-1">
+            <span className="text-muted-foreground flex items-center gap-1">
               <Loader2 className="h-3 w-3 animate-spin" />
               Saving...
             </span>
           )}
           {saveStatus === "saved" && (
-            <span className="text-sm text-green-600 flex items-center gap-1">
+            <span className="text-green-600 flex items-center gap-1">
               <Check className="h-3 w-3" />
               Saved
             </span>
           )}
           {saveStatus === "error" && (
-            <span className="text-sm text-red-600">Save failed</span>
-          )}
-          {hasUnsavedChanges && saveStatus === "idle" && (
-            <span className="text-sm text-muted-foreground">Unsaved changes</span>
+            <span className="text-red-600 flex items-center gap-1">
+              <AlertCircle className="h-3 w-3" />
+              Save failed
+              <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={handleManualRetry}>
+                Retry
+              </Button>
+            </span>
           )}
         </div>
+        {currentNoteId && (
+          <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+            <DialogTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-7 text-muted-foreground hover:text-destructive">
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Delete Note</DialogTitle>
+                <DialogDescription>
+                  Are you sure you want to delete this note? This action cannot be undone.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setDeleteOpen(false)} disabled={isDeleting}>
+                  Cancel
+                </Button>
+                <Button variant="destructive" onClick={handleDelete} disabled={isDeleting}>
+                  {isDeleting ? "Deleting..." : "Delete"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )}
       </div>
 
-      {/* Title input */}
-      <Input
-        placeholder="Note title"
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        className="text-xl font-semibold border-none shadow-none focus-visible:ring-0 px-0"
-      />
-
-      {/* Tags section */}
-      <div className="space-y-2">
-        <div className="flex flex-wrap gap-1">
-          {tags.map((tag) => (
-            <Badge key={tag} variant="secondary" className="gap-1">
-              {tag}
-              <button
-                type="button"
-                onClick={() => handleRemoveTag(tag)}
-                className="ml-1 hover:text-destructive"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </Badge>
-          ))}
-        </div>
+      {/* Editor content */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {/* Title input */}
         <Input
-          placeholder="Add tags (press Enter)"
-          value={tagInput}
-          onChange={(e) => setTagInput(e.target.value)}
-          onKeyDown={handleAddTag}
-          className="max-w-xs"
+          ref={titleInputRef}
+          placeholder="Untitled"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          className="text-xl font-semibold border-none shadow-none focus-visible:ring-0 px-0 h-auto"
+        />
+
+        {/* Tags section */}
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-1">
+            {tags.map((tag) => (
+              <Badge key={tag} variant="secondary" className="gap-1">
+                {tag}
+                <button
+                  type="button"
+                  onClick={() => handleRemoveTag(tag)}
+                  className="ml-1 hover:text-destructive"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </Badge>
+            ))}
+          </div>
+          <Input
+            placeholder="Add tags (press Enter)"
+            value={tagInput}
+            onChange={(e) => setTagInput(e.target.value)}
+            onKeyDown={handleAddTag}
+            className="max-w-xs text-sm"
+          />
+        </div>
+
+        {/* Content textarea */}
+        <Textarea
+          placeholder="Start writing..."
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          className="min-h-[500px] resize-none font-mono text-base leading-relaxed border-none shadow-none focus-visible:ring-0 px-0"
         />
       </div>
-
-      {/* Content textarea - simple and fast */}
-      <Textarea
-        placeholder="Start writing..."
-        value={content}
-        onChange={(e) => setContent(e.target.value)}
-        className="min-h-[500px] resize-none font-mono text-base leading-relaxed"
-      />
     </div>
   );
 }

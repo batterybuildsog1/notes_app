@@ -116,10 +116,10 @@ export async function POST(request: NextRequest) {
       tags = tags || template.default_tags;
     }
 
-    // Input validation
-    if (!title || typeof title !== "string") {
+    // Input validation - allow blank title, default to "Untitled"
+    if (title && typeof title !== "string") {
       return NextResponse.json(
-        { error: "Title is required and must be a string" },
+        { error: "Title must be a string" },
         { status: 400 }
       );
     }
@@ -129,6 +129,8 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+    title = title?.trim() || "Untitled";
+    content = content || "";
     if (title.length > 500) {
       return NextResponse.json(
         { error: "Title must be 500 characters or less" },
@@ -143,8 +145,8 @@ export async function POST(request: NextRequest) {
     }
 
     const note = await createNote({
-      title: title.trim(),
-      content: content ? content.trim() : "",
+      title,
+      content: content.trim(),
       user_id: userId,
       category: category?.trim(),
       tags: Array.isArray(tags) ? tags.map((t: string) => t.trim()) : undefined,
