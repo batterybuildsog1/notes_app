@@ -48,6 +48,25 @@ export interface EnrichmentResult {
 }
 
 /**
+ * Load entity disambiguation rules from DB
+ * These rules tell the enrichment prompt how to resolve ambiguous first names
+ */
+async function loadDisambiguationRules(userId: string): Promise<Array<{entity_pattern: string; context_clue: string | null; resolved_name: string}>> {
+  try {
+    const rows = await sql`
+      SELECT entity_pattern, context_clue, resolved_name
+      FROM entity_resolution_rules
+      WHERE user_id = ${userId}
+      ORDER BY entity_pattern, context_clue
+    `;
+    return rows as Array<{entity_pattern: string; context_clue: string | null; resolved_name: string}>;
+  } catch {
+    // Table may not exist yet — fall back to empty
+    return [];
+  }
+}
+
+/**
  * Build rich context from user's knowledge base
  */
 async function buildKnowledgeContext(userId: string) {
@@ -73,7 +92,7 @@ async function buildKnowledgeContext(userId: string) {
 /**
  * Build the enrichment prompt
  */
-function buildPrompt(notes: BatchNoteInput[], context: Awaited<ReturnType<typeof buildKnowledgeContext>>): string {
+function buildPrompt(notes: BatchNoteInput[], context: Awaited<ReturnType<typeof buildKnowledgeContext>>, disambiguationRules?: Array<{entity_pattern: string; context_clue: string | null; resolved_name: string}>): string {
   const contextSection = `
 ## Your Knowledge Base Context
 
@@ -85,6 +104,16 @@ ${context.people.map(p => `- ${p.name}`).join('\n')}
 
 **Known Companies:**
 ${context.companies.join(', ')}
+
+## Entity Disambiguation Rules
+When you encounter these names, resolve them automatically — do NOT flag as ambiguous:
+${disambiguationRules && disambiguationRules.length > 0
+  ? disambiguationRules.map(r => `- "${r.entity_pattern}"${r.context_clue ? ` in context of ${r.context_clue}` : ''} → ${r.resolved_name}`).join('\n')
+  : `- "Isaac" in real estate/TechRidge/Blackridge context → Isaac Barlow (Barlow Properties)
+- "Ryan" in consulting/density context → Ryan Kimball (Kimball Consulting Group)
+- "Rob" in consultant context → Rob McFarlane
+- Context clue "Techridge" or "Blackridge" → real estate development
+- Context clue "St. George" → Southern Utah projects`}
 `;
 
   const notesSection = notes.map((n, i) => `
@@ -146,8 +175,11 @@ export async function batchExtractEnrichments(
   if (!apiKey || notes.length === 0) return new Map();
 
   const userId = notes[0].userId;
-  const context = await buildKnowledgeContext(userId);
-  const prompt = buildPrompt(notes, context);
+  const [context, disambiguationRules] = await Promise.all([
+    buildKnowledgeContext(userId),
+    loadDisambiguationRules(userId),
+  ]);
+  const prompt = buildPrompt(notes, context, disambiguationRules);
 
   try {
     const response = await fetch(GROK_API_URL, {
@@ -279,7 +311,7 @@ export async function createActionItem(
   
   await sql`
     INSERT INTO action_items (note_id, user_id, text, priority, source, status, created_at)
-    VALUES (${noteId}, ${userId}, ${text}, ${priority}, ${source}, 'pending', NOW())
+    VALUES (${noteId}::uuid, ${userId}::uuid, ${text}, ${priority}, ${source}, 'pending', NOW())
     ON CONFLICT DO NOTHING
   `;
 }
