@@ -220,7 +220,7 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
     router.refresh();
   };
 
-  // Refresh notes list from server
+  // Refresh notes list from server (skip the actively-edited note to avoid overwriting local state)
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
@@ -228,7 +228,14 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
         const res = await fetch(`/api/notes?${params}`);
         if (res.ok) {
           const freshNotes: NoteWithEntities[] = await res.json();
-          setNotes(freshNotes);
+          setNotes((prev) => {
+            // Preserve the currently active note's local data to avoid overwriting editor state
+            const editingId = activeNoteId;
+            if (!editingId) return freshNotes;
+            const localNote = prev.find((n) => n.id === editingId);
+            if (!localNote) return freshNotes;
+            return freshNotes.map((n) => (n.id === editingId ? { ...n, title: localNote.title, content: localNote.content, tags: localNote.tags } : n));
+          });
           const cats = new Set<string>();
           freshNotes.forEach((n) => {
             if (n.category) cats.add(n.category);
@@ -241,7 +248,7 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
       }
     }, 60000);
     return () => clearInterval(interval);
-  }, []);
+  }, [activeNoteId]);
 
   // Whether we're showing a project/agent view (hides sidebar+editor)
   const showingView = activeView === "project" || activeView === "agent";

@@ -74,7 +74,12 @@ export function NoteEditor({ note, onSave, onDelete, onCreate }: NoteEditorProps
     if (!note?.id) {
       setTimeout(() => titleInputRef.current?.focus(), 50);
     }
-  }, [note?.id, note?.title, note?.content, note?.tags]);
+  // Only re-sync when switching to a different note (note?.id).
+  // Content/title/tags changes from props (e.g. after save callbacks or background refresh)
+  // must NOT overwrite the editor — local state is the source of truth while editing.
+  // The key={activeNoteId} on NoteEditor already handles full remount on note switch.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [note?.id]);
 
   // Keep refs in sync with state
   useEffect(() => {
