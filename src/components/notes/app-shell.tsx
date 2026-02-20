@@ -3,12 +3,13 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { signOut, useSession } from "@/lib/auth-client";
-import { Sidebar, SidebarToggle } from "./sidebar";
+import { Sidebar } from "./sidebar";
 import { NoteEditor } from "./note-editor";
 import { ProjectBar } from "./project-bar";
 import { AgentBar } from "./agent-bar";
 import { ProjectView } from "./project-view";
 import { AgentView } from "./agent-view";
+import { BottomTabs, type MobileTab } from "./bottom-tabs";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -16,9 +17,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { User, LogOut, Moon, Sun, FileText } from "lucide-react";
+import { User, LogOut, Moon, Sun, FileText, FolderKanban, Bot } from "lucide-react";
 import { searchNotes } from "@/lib/search";
-import { getAgentById } from "@/lib/agents";
+import { getAgentById, AGENTS } from "@/lib/agents";
 import type { Note, NoteWithEntities, ProjectWithCounts } from "@/lib/db";
 
 type ActiveView = "notes" | "project" | "agent";
@@ -39,7 +40,6 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // View state
   const [activeView, setActiveView] = useState<ActiveView>("notes");
@@ -114,6 +114,9 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
     if (!activeAgentId) return undefined;
     return getAgentById(activeAgentId);
   }, [activeAgentId]);
+
+  // Map activeView to mobile tab
+  const mobileTab: MobileTab = activeView === "project" ? "projects" : activeView === "agent" ? "agents" : "notes";
 
   // Handlers
   const handleSelectNote = useCallback((noteId: string) => {
@@ -199,6 +202,10 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
     [activeNoteId]
   );
 
+  const handleBack = useCallback(() => {
+    setActiveNoteId(null);
+  }, []);
+
   const handleCategoryFilter = useCallback((cat: string | null) => {
     setCategoryFilter(cat);
   }, []);
@@ -206,6 +213,48 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
   const handleSearch = useCallback((query: string) => {
     setSearchQuery(query);
   }, []);
+
+  // Mobile tab switching
+  const handleMobileTabChange = useCallback((tab: MobileTab) => {
+    if (tab === "notes") {
+      setActiveView("notes");
+      setActiveProjectId(null);
+      setActiveAgentId(null);
+    } else if (tab === "projects") {
+      setActiveView("project");
+      setActiveAgentId(null);
+      setActiveNoteId(null);
+    } else if (tab === "agents") {
+      setActiveView("agent");
+      setActiveProjectId(null);
+      setActiveNoteId(null);
+    }
+  }, []);
+
+  // Pull-to-refresh handler
+  const handleRefresh = useCallback(async () => {
+    try {
+      const params = new URLSearchParams({ limit: "50" });
+      const res = await fetch(`/api/notes?${params}`);
+      if (res.ok) {
+        const freshNotes: NoteWithEntities[] = await res.json();
+        setNotes((prev) => {
+          const editingId = activeNoteId;
+          if (!editingId) return freshNotes;
+          const localNote = prev.find((n) => n.id === editingId);
+          if (!localNote) return freshNotes;
+          return freshNotes.map((n) => (n.id === editingId ? { ...n, title: localNote.title, content: localNote.content, tags: localNote.tags } : n));
+        });
+        const cats = new Set<string>();
+        freshNotes.forEach((n) => {
+          if (n.category) cats.add(n.category);
+        });
+        setCategories([...cats].sort());
+      }
+    } catch {
+      // Silent fail
+    }
+  }, [activeNoteId]);
 
   const toggleTheme = () => {
     const newMode = !isDark;
@@ -220,7 +269,7 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
     router.refresh();
   };
 
-  // Refresh notes list from server (skip the actively-edited note to avoid overwriting local state)
+  // Background refresh (60s interval)
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
@@ -229,7 +278,6 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
         if (res.ok) {
           const freshNotes: NoteWithEntities[] = await res.json();
           setNotes((prev) => {
-            // Preserve the currently active note's local data to avoid overwriting editor state
             const editingId = activeNoteId;
             if (!editingId) return freshNotes;
             const localNote = prev.find((n) => n.id === editingId);
@@ -240,26 +288,24 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
           freshNotes.forEach((n) => {
             if (n.category) cats.add(n.category);
           });
-          const sorted = [...cats].sort();
-          setCategories(sorted);
+          setCategories([...cats].sort());
         }
       } catch {
-        // Silent fail on background refresh
+        // Silent fail
       }
     }, 60000);
     return () => clearInterval(interval);
   }, [activeNoteId]);
 
-  // Whether we're showing a project/agent view (hides sidebar+editor)
+  // Whether we're showing a project/agent view
   const showingView = activeView === "project" || activeView === "agent";
 
   return (
     <div className="h-screen flex flex-col bg-background">
-      {/* Row 1: Project bar + utility icons */}
-      <header className="border-b shrink-0 bg-background/95 backdrop-blur z-30">
+      {/* Desktop header — hidden on mobile */}
+      <header className="hidden md:block border-b shrink-0 bg-background/95 backdrop-blur z-30">
         <div className="flex items-center justify-between h-10">
           <div className="flex items-center gap-1 min-w-0 flex-1">
-            <SidebarToggle onClick={() => setSidebarOpen(true)} />
             <ProjectBar
               projects={projects}
               activeProjectId={activeView === "project" ? activeProjectId : null}
@@ -290,8 +336,6 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
             </DropdownMenu>
           </div>
         </div>
-
-        {/* Row 2: Agent bar */}
         <div className="border-t">
           <AgentBar
             activeAgentId={activeView === "agent" ? activeAgentId : null}
@@ -303,8 +347,8 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
       {/* Main content area */}
       <div className="flex flex-1 overflow-hidden">
         {showingView ? (
-          // Project or Agent view — full width
-          <main className="flex-1 overflow-hidden">
+          // Project or Agent view
+          <main className="flex-1 overflow-hidden pb-14 md:pb-0">
             {activeView === "project" && activeProject && (
               <ProjectView
                 project={activeProject}
@@ -317,25 +361,42 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
                 onSelectNote={handleNoteFromView}
               />
             )}
+            {/* Mobile project picker (when no project selected) */}
+            {activeView === "project" && !activeProject && (
+              <MobileProjectPicker
+                projects={projects}
+                onSelect={(id) => setActiveProjectId(id)}
+              />
+            )}
+            {/* Mobile agent picker (when no agent selected) */}
+            {activeView === "agent" && !activeAgent && (
+              <MobileAgentPicker
+                onSelect={(id) => setActiveAgentId(id)}
+              />
+            )}
           </main>
         ) : (
-          // Default sidebar + editor layout
+          // Notes view: sidebar + editor
           <>
-            <Sidebar
-              notes={filteredNotes}
-              categories={categories}
-              activeNoteId={activeNoteId}
-              onSelectNote={handleSelectNote}
-              onNewNote={handleNewNote}
-              categoryFilter={categoryFilter}
-              onCategoryFilter={handleCategoryFilter}
-              searchQuery={searchQuery}
-              onSearch={handleSearch}
-              isOpen={sidebarOpen}
-              onClose={() => setSidebarOpen(false)}
-            />
+            {/* Sidebar: full-width on mobile when no note active, 280px on desktop */}
+            <div className={`${activeNoteId ? "hidden" : "flex"} md:flex flex-col w-full md:w-auto`}>
+              <Sidebar
+                notes={filteredNotes}
+                categories={categories}
+                activeNoteId={activeNoteId}
+                onSelectNote={handleSelectNote}
+                onNewNote={handleNewNote}
+                categoryFilter={categoryFilter}
+                onCategoryFilter={handleCategoryFilter}
+                searchQuery={searchQuery}
+                onSearch={handleSearch}
+                onDelete={handleNoteDeleted}
+                onRefresh={handleRefresh}
+              />
+            </div>
 
-            <main className="flex-1 overflow-hidden">
+            {/* Editor: full-width on mobile when note active, flex-1 on desktop */}
+            <main className={`${activeNoteId ? "flex" : "hidden"} md:flex flex-1 flex-col overflow-hidden`}>
               {activeNote || activeNoteId ? (
                 <NoteEditor
                   key={activeNoteId}
@@ -343,6 +404,7 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
                   onSave={handleNoteSaved}
                   onDelete={handleNoteDeleted}
                   onCreate={handleNoteCreated}
+                  onBack={handleBack}
                 />
               ) : (
                 <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-3">
@@ -356,6 +418,80 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
             </main>
           </>
         )}
+      </div>
+
+      {/* Bottom tabs — mobile only */}
+      <BottomTabs activeTab={mobileTab} onTabChange={handleMobileTabChange} />
+    </div>
+  );
+}
+
+// --- Mobile picker components ---
+
+function MobileProjectPicker({
+  projects,
+  onSelect,
+}: {
+  projects: ProjectWithCounts[];
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between px-4 py-3 border-b md:hidden">
+        <h1 className="text-lg font-semibold">Projects</h1>
+      </div>
+      <div className="flex-1 overflow-y-auto px-4 py-2 pb-14">
+        {projects.length === 0 && (
+          <p className="text-sm text-muted-foreground text-center py-8">
+            No projects yet
+          </p>
+        )}
+        {projects.map((project) => (
+          <button
+            key={project.id}
+            onClick={() => onSelect(project.id)}
+            className="w-full text-left px-3 py-3 rounded-lg hover:bg-accent/50 active:bg-accent transition-colors flex items-center gap-3 min-h-[44px]"
+          >
+            <FolderKanban className="h-5 w-5 text-muted-foreground shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="font-medium truncate">{project.name}</p>
+              <p className="text-xs text-muted-foreground">
+                {project.noteCount} {project.noteCount === 1 ? "note" : "notes"}
+              </p>
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MobileAgentPicker({
+  onSelect,
+}: {
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between px-4 py-3 border-b md:hidden">
+        <h1 className="text-lg font-semibold">Agents</h1>
+      </div>
+      <div className="flex-1 overflow-y-auto px-4 py-2 pb-14">
+        {AGENTS.map((agent) => (
+          <button
+            key={agent.id}
+            onClick={() => onSelect(agent.id)}
+            className="w-full text-left px-3 py-3 rounded-lg hover:bg-accent/50 active:bg-accent transition-colors flex items-center gap-3 min-h-[44px]"
+          >
+            <Bot className="h-5 w-5 text-muted-foreground shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="font-medium truncate">{agent.name}</p>
+              <p className="text-xs text-muted-foreground line-clamp-1">
+                {agent.description}
+              </p>
+            </div>
+          </button>
+        ))}
       </div>
     </div>
   );

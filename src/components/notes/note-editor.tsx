@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { X, Check, Loader2, AlertCircle, Trash2 } from "lucide-react";
+import { X, Check, Loader2, AlertCircle, Trash2, ArrowLeft } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -25,11 +25,13 @@ interface NoteEditorProps {
   onDelete?: (noteId: string) => void;
   /** Callback when a new note is created (returns the new note ID) */
   onCreate?: (note: Note) => void;
+  /** Back navigation for mobile */
+  onBack?: () => void;
 }
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
-export function NoteEditor({ note, onSave, onDelete, onCreate }: NoteEditorProps) {
+export function NoteEditor({ note, onSave, onDelete, onCreate, onBack }: NoteEditorProps) {
   const [title, setTitle] = useState(note?.title || "");
   const [content, setContent] = useState(note?.content || "");
   const [tags, setTags] = useState<string[]>(note?.tags || []);
@@ -309,6 +311,11 @@ export function NoteEditor({ note, onSave, onDelete, onCreate }: NoteEditorProps
       {/* Top bar with save status and actions */}
       <div className="flex items-center justify-between gap-4 px-4 py-2 border-b shrink-0">
         <div className="flex items-center gap-2 text-sm">
+          {onBack && (
+            <Button variant="ghost" size="sm" className="md:hidden h-8 w-8 p-0 mr-1" onClick={onBack}>
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+          )}
           {saveStatus === "saving" && (
             <span className="text-muted-foreground flex items-center gap-1">
               <Loader2 className="h-3 w-3 animate-spin" />
@@ -359,21 +366,21 @@ export function NoteEditor({ note, onSave, onDelete, onCreate }: NoteEditorProps
       </div>
 
       {/* Editor content */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="flex-1 overflow-y-auto px-4 pt-4 pb-20 md:pb-4 space-y-4">
         {/* Title input */}
         <Input
           ref={titleInputRef}
           placeholder="Untitled"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          className="text-xl font-semibold border-none shadow-none focus-visible:ring-0 px-0 h-auto"
+          className="text-lg md:text-xl font-semibold border-none shadow-none focus-visible:ring-0 px-0 h-10 md:h-auto"
         />
 
         {/* Tags section */}
         <div className="space-y-2">
           <div className="flex flex-wrap gap-1">
             {tags.map((tag) => (
-              <Badge key={tag} variant="secondary" className="gap-1">
+              <Badge key={tag} variant="secondary" className="gap-1 h-7 md:h-auto">
                 {tag}
                 <button
                   type="button"
@@ -390,7 +397,7 @@ export function NoteEditor({ note, onSave, onDelete, onCreate }: NoteEditorProps
             value={tagInput}
             onChange={(e) => setTagInput(e.target.value)}
             onKeyDown={handleAddTag}
-            className="max-w-xs text-sm"
+            className="max-w-xs h-10 md:h-auto text-sm"
           />
         </div>
 
@@ -399,7 +406,7 @@ export function NoteEditor({ note, onSave, onDelete, onCreate }: NoteEditorProps
           placeholder="Start writing..."
           value={content}
           onChange={(e) => setContent(e.target.value)}
-          className="min-h-[500px] resize-none font-mono text-base leading-relaxed border-none shadow-none focus-visible:ring-0 px-0"
+          className="min-h-[200px] md:min-h-[500px] resize-none font-mono text-base leading-relaxed border-none shadow-none focus-visible:ring-0 px-0 textarea-autogrow"
         />
       </div>
     </div>

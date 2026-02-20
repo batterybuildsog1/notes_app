@@ -87,6 +87,16 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
           type: "string",
           description: "Project name this note belongs to",
         },
+        source: {
+          type: "string",
+          description:
+            "Agent source ID (e.g., 'pm-agent', 'swarm-orch'). Used to attribute notes to agents.",
+        },
+        external_event_id: {
+          type: "string",
+          description:
+            "Deduplication key. If a note with this ID already exists for the user, it will be updated instead of creating a duplicate.",
+        },
       },
       required: ["title", "content"],
     },
@@ -179,6 +189,16 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         project: {
           type: "string",
           description: "Filter by linked project ID",
+        },
+        projectExternalId: {
+          type: "string",
+          description:
+            "Filter by project external ID (e.g., 'TR-1.0'). Alternative to project UUID.",
+        },
+        source: {
+          type: "string",
+          description:
+            "Filter by agent source ID (e.g., 'pm-agent', 'swarm-orch')",
         },
       },
     },

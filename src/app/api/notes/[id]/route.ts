@@ -4,6 +4,7 @@ import { getAuthUserId } from "@/lib/auth";
 import { checkServiceAuth } from "@/lib/service-auth";
 import { enrichNote } from "@/lib/enrichment";
 import { enrichWithEntities, linkEntitiesToNote, LinkedEntities } from "@/lib/entity-extraction";
+import { dispatchWebhooks } from "@/lib/webhooks";
 
 async function getUserId(request: NextRequest): Promise<string | null> {
   const userId = await getAuthUserId();
@@ -107,6 +108,14 @@ export async function PUT(
       const entities = await getNoteEntities(id);
       linkedEntities = entities;
     }
+
+    // Fire webhook (non-blocking)
+    dispatchWebhooks(userId, "note.updated", {
+      note_id: note.id,
+      title: note.title,
+      category: note.category,
+      source: note.source,
+    }).catch(() => {});
 
     return NextResponse.json({
       ...note,

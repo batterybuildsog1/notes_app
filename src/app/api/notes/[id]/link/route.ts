@@ -12,6 +12,7 @@ import {
 import { getAuthUserId } from "@/lib/auth";
 import { checkServiceAuth } from "@/lib/service-auth";
 import { checkRateLimit, rateLimitHeaders } from "@/lib/rate-limit";
+import { dispatchWebhooks } from "@/lib/webhooks";
 
 async function getUserId(request: NextRequest): Promise<string | null> {
   const userId = await getAuthUserId();
@@ -135,6 +136,15 @@ export async function POST(
     }
 
     console.log(`[LINK] Linked ${type} "${linkedEntity.name}" to note ${noteId}`);
+
+    // Fire webhook for project links
+    if (type === "project") {
+      dispatchWebhooks(userId, "note.project-linked", {
+        note_id: noteId,
+        project_id: linkedEntity.id,
+        project_name: linkedEntity.name,
+      }).catch(() => {});
+    }
 
     return NextResponse.json(
       {

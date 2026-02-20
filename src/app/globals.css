@@ -121,5 +121,44 @@
   }
   body {
     @apply bg-background text-foreground;
+    /* Prevent overscroll bounce on iOS */
+    overscroll-behavior: none;
   }
+}
+
+/* Mobile-safe bottom padding for bottom tabs */
+.pb-safe {
+  padding-bottom: calc(3rem + env(safe-area-inset-bottom));
+}
+
+/* Auto-growing textarea */
+.textarea-autogrow {
+  field-sizing: content;
+  min-height: 200px;
+  max-height: none;
+}
+
+/* Swipeable note item */
+.swipe-container {
+  overflow: hidden;
+  position: relative;
+}
+
+.swipe-content {
+  transition: transform 150ms ease-out;
+  will-change: transform;
+}
+
+.swipe-content.swiping {
+  transition: none;
+}
+
+/* Pull-to-refresh indicator */
+.pull-indicator {
+  transition: transform 200ms ease-out, opacity 200ms ease-out;
+}
+
+/* iOS momentum scrolling */
+.scroll-touch {
+  -webkit-overflow-scrolling: touch;
 }

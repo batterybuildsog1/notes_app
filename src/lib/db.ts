@@ -31,6 +31,8 @@ export interface Project {
   name: string;
   normalized_name: string;
   status: string;
+  external_id: string | null;  // Canonical swarm ID (e.g., "TR-1.0")
+  slug: string | null;         // URL-friendly slug (e.g., "the-scar")
   created_at: Date;
   updated_at: Date;
 }
@@ -69,6 +71,7 @@ export interface Note {
   priority: string | null;
   project: string | null;
   source: string | null;
+  external_event_id: string | null;  // For deduplication of swarm artifacts
   user_id: string;
   created_at: Date;           // System timestamp
   updated_at: Date;           // System timestamp
@@ -160,6 +163,7 @@ export async function getNotesWithEntities(
     personId?: string;
     companyId?: string;
     projectId?: string;
+    projectExternalId?: string;
     source?: string;
   }
 ): Promise<NoteWithEntities[]> {
@@ -203,6 +207,7 @@ export async function getNotesWithEntities(
       ${options?.companyId ? sql`AND EXISTS (SELECT 1 FROM note_companies xnc WHERE xnc.note_id = n.id AND xnc.company_id = ${options.companyId})` : sql``}
       ${options?.projectId ? sql`AND EXISTS (SELECT 1 FROM note_projects xpr WHERE xpr.note_id = n.id AND xpr.project_id = ${options.projectId})` : sql``}
       ${options?.source ? sql`AND n.source = ${options.source}` : sql``}
+      ${options?.projectExternalId ? sql`AND EXISTS (SELECT 1 FROM note_projects xpr2 JOIN projects xp ON xp.id = xpr2.project_id WHERE xpr2.note_id = n.id AND xp.external_id = ${options.projectExternalId})` : sql``}
     GROUP BY n.id
     ORDER BY COALESCE(n.original_updated_at, n.updated_at) DESC
     LIMIT ${limit} OFFSET ${offset}
@@ -231,6 +236,7 @@ export async function createNote(data: {
   priority?: string;
   project?: string;
   source?: string;
+  external_event_id?: string;
   original_created_at?: string | Date;
   original_updated_at?: string | Date;
 }): Promise<Note> {
@@ -243,7 +249,7 @@ export async function createNote(data: {
     : null;
 
   const rows = await sql`
-    INSERT INTO notes (title, content, user_id, category, tags, priority, project, source, created_at, updated_at, original_created_at, original_updated_at)
+    INSERT INTO notes (title, content, user_id, category, tags, priority, project, source, external_event_id, created_at, updated_at, original_created_at, original_updated_at)
     VALUES (
       ${data.title},
       ${data.content},
@@ -253,6 +259,7 @@ export async function createNote(data: {
       ${data.priority || null},
       ${data.project || null},
       ${data.source || null},
+      ${data.external_event_id || null},
       NOW(),
       NOW(),
       ${originalCreatedAt},
@@ -261,6 +268,55 @@ export async function createNote(data: {
     RETURNING *
   `;
   return rows[0] as Note;
+}
+
+/**
+ * Upsert a note by external_event_id (for swarm artifact deduplication)
+ * If a note with the same external_event_id exists for this user, update it.
+ * Otherwise, create a new note.
+ */
+export async function upsertNoteByExternalEventId(data: {
+  title: string;
+  content: string;
+  user_id: string;
+  external_event_id: string;
+  category?: string;
+  tags?: string[];
+  priority?: string;
+  project?: string;
+  source?: string;
+}): Promise<{ note: Note; created: boolean }> {
+  const tagsArray = data.tags && data.tags.length > 0 ? data.tags : null;
+
+  const rows = await sql`
+    INSERT INTO notes (title, content, user_id, category, tags, priority, project, source, external_event_id, created_at, updated_at)
+    VALUES (
+      ${data.title},
+      ${data.content},
+      ${data.user_id},
+      ${data.category || null},
+      ${tagsArray},
+      ${data.priority || null},
+      ${data.project || null},
+      ${data.source || null},
+      ${data.external_event_id},
+      NOW(),
+      NOW()
+    )
+    ON CONFLICT (user_id, external_event_id) WHERE external_event_id IS NOT NULL
+    DO UPDATE SET
+      title = EXCLUDED.title,
+      content = EXCLUDED.content,
+      category = COALESCE(EXCLUDED.category, notes.category),
+      tags = COALESCE(EXCLUDED.tags, notes.tags),
+      source = COALESCE(EXCLUDED.source, notes.source),
+      updated_at = NOW()
+    RETURNING *, (xmax = 0) as is_new
+  `;
+
+  const row = rows[0] as Note & { is_new: boolean };
+  const created = row.is_new;
+  return { note: row, created };
 }
 
 export async function updateNote(
@@ -851,6 +907,8 @@ export async function getProjectsWithSharedEntities(
         pr.name as project_name,
         pr.normalized_name,
         pr.status,
+        pr.external_id,
+        pr.slug,
         pr.created_at,
         pr.updated_at,
         pe.name as entity_name,
@@ -871,6 +929,8 @@ export async function getProjectsWithSharedEntities(
         pr.name as project_name,
         pr.normalized_name,
         pr.status,
+        pr.external_id,
+        pr.slug,
         pr.created_at,
         pr.updated_at,
         co.name as entity_name,
@@ -888,12 +948,14 @@ export async function getProjectsWithSharedEntities(
       project_name,
       normalized_name,
       status,
+      external_id,
+      slug,
       created_at,
       updated_at,
       COUNT(*) as overlap_count,
       array_agg(DISTINCT entity_name) as shared_entities
     FROM project_overlaps
-    GROUP BY project_id, project_name, normalized_name, status, created_at, updated_at
+    GROUP BY project_id, project_name, normalized_name, status, external_id, slug, created_at, updated_at
     ORDER BY overlap_count DESC
     LIMIT 10
   `;
@@ -905,6 +967,8 @@ export async function getProjectsWithSharedEntities(
       name: row.project_name as string,
       normalized_name: row.normalized_name as string,
       status: row.status as string,
+      external_id: (row.external_id as string) || null,
+      slug: (row.slug as string) || null,
       created_at: row.created_at as Date,
       updated_at: row.updated_at as Date,
     },
@@ -931,6 +995,8 @@ export async function findSimilarProjects(
         pr.name as project_name,
         pr.normalized_name,
         pr.status,
+        pr.external_id,
+        pr.slug,
         pr.created_at,
         pr.updated_at,
         AVG(1 - (n.embedding <=> ${embeddingStr}::vector)) as avg_similarity
@@ -939,7 +1005,7 @@ export async function findSimilarProjects(
       JOIN notes n ON n.id = nprj.note_id
       WHERE pr.user_id = ${userId}
         AND n.embedding IS NOT NULL
-      GROUP BY pr.id, pr.name, pr.normalized_name, pr.status, pr.created_at, pr.updated_at
+      GROUP BY pr.id, pr.name, pr.normalized_name, pr.status, pr.external_id, pr.slug, pr.created_at, pr.updated_at
       HAVING AVG(1 - (n.embedding <=> ${embeddingStr}::vector)) > 0.3
     )
     SELECT *
@@ -955,6 +1021,8 @@ export async function findSimilarProjects(
       name: row.project_name as string,
       normalized_name: row.normalized_name as string,
       status: row.status as string,
+      external_id: (row.external_id as string) || null,
+      slug: (row.slug as string) || null,
       created_at: row.created_at as Date,
       updated_at: row.updated_at as Date,
     },

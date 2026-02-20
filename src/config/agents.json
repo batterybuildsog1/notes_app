@@ -1,0 +1,220 @@
+[
+  {
+    "id": "pm",
+    "name": "PM",
+    "description": "Chief of Staff — morning/evening briefs, constraint tracking",
+    "source": "pm-agent",
+    "group": "core",
+    "model": "gemini-thinking",
+    "telegramBot": "main"
+  },
+  {
+    "id": "notes-pm",
+    "name": "Notes PM",
+    "description": "Knowledge base health monitoring (read-only, every 6h)",
+    "source": "notes-pm",
+    "group": "core",
+    "model": "coder-thinking",
+    "telegramBot": "notes-pm-bot"
+  },
+  {
+    "id": "finance",
+    "name": "Finance",
+    "description": "Monthly financial exports (Cash App, Zions, etc.)",
+    "source": "finance-agent",
+    "group": "core",
+    "model": "gemini-thinking",
+    "telegramBot": "finance-bot"
+  },
+  {
+    "id": "accounting",
+    "name": "Accounting",
+    "description": "Transaction categorization, weekly/monthly reports",
+    "source": "accounting",
+    "group": "core"
+  },
+  {
+    "id": "money-heaven",
+    "name": "Money Heaven",
+    "description": "Mortgage app daily health monitoring",
+    "source": "money-heaven",
+    "group": "platform",
+    "model": "gemini-3-flash",
+    "telegramBot": "money-heaven-bot"
+  },
+  {
+    "id": "cleanup",
+    "name": "Cleanup",
+    "description": "Multi-agent codebase cleanup orchestrator",
+    "source": "cleanup",
+    "group": "platform",
+    "model": "gemini-thinking",
+    "telegramBot": "cleanup-bot"
+  },
+  {
+    "id": "coder",
+    "name": "Coder",
+    "description": "Code generation tasks",
+    "source": "coder",
+    "group": "platform",
+    "model": "coder-thinking",
+    "telegramBot": "alan-coding-bot"
+  },
+  {
+    "id": "atlas",
+    "name": "Atlas",
+    "description": "Atlas agent",
+    "source": "atlas",
+    "group": "platform",
+    "model": "gemini-thinking",
+    "telegramBot": "atlas-bot"
+  },
+  {
+    "id": "finance-terms",
+    "name": "Finance Terms",
+    "description": "Lending parameter watchdog (source-cited)",
+    "source": "finance-terms",
+    "group": "platform",
+    "model": "coder-thinking",
+    "telegramBot": "trloan-bot"
+  },
+  {
+    "id": "tr-scar",
+    "name": "The Scar",
+    "description": "The Scar (TR-1.0)",
+    "source": "tr-scar",
+    "group": "techridge",
+    "projectId": "TR-1.0",
+    "model": "opus"
+  },
+  {
+    "id": "tr-1-1-townhouses",
+    "name": "Townhouses",
+    "description": "1.1 Townhouses (TR-1.1)",
+    "source": "tr-1-1-townhouses",
+    "group": "techridge",
+    "projectId": "TR-1.1",
+    "model": "opus"
+  },
+  {
+    "id": "tr-1-2-apartments",
+    "name": "Apartments",
+    "description": "1.2 Apartments (TR-1.2)",
+    "source": "tr-1-2-apartments",
+    "group": "techridge",
+    "projectId": "TR-1.2",
+    "model": "opus"
+  },
+  {
+    "id": "tr-container-park",
+    "name": "Container Park",
+    "description": "Container Park (TR-CP1)",
+    "source": "tr-container-park",
+    "group": "techridge",
+    "projectId": "TR-CP1",
+    "model": "opus"
+  },
+  {
+    "id": "tr-container-park-p2",
+    "name": "CP Phase 2",
+    "description": "Container Park Phase 2 (TR-CP2)",
+    "source": "tr-container-park-p2",
+    "group": "techridge",
+    "projectId": "TR-CP2",
+    "model": "opus"
+  },
+  {
+    "id": "tr-skyview",
+    "name": "Skyview",
+    "description": "Skyview Building (TR-SKY)",
+    "source": "tr-skyview",
+    "group": "techridge",
+    "projectId": "TR-SKY",
+    "model": "opus"
+  },
+  {
+    "id": "tr-kiln",
+    "name": "Kiln",
+    "description": "Kiln Coworking (TR-KILN)",
+    "source": "tr-kiln",
+    "group": "techridge",
+    "projectId": "TR-KILN",
+    "model": "opus"
+  },
+  {
+    "id": "tr-blackridge",
+    "name": "Blackridge",
+    "description": "Blackridge Cove (TR-BRC)",
+    "source": "tr-blackridge",
+    "group": "techridge",
+    "projectId": "TR-BRC",
+    "model": "opus"
+  },
+  {
+    "id": "tr-hangar-c",
+    "name": "Hangar C",
+    "description": "Hangar C (TR-HC)",
+    "source": "tr-hangar-c",
+    "group": "techridge",
+    "projectId": "TR-HC",
+    "model": "opus"
+  },
+  {
+    "id": "tr-micro-apartments",
+    "name": "Micro Apts",
+    "description": "Micro Apartments (TR-MICRO)",
+    "source": "tr-micro-apartments",
+    "group": "techridge",
+    "projectId": "TR-MICRO",
+    "model": "opus"
+  },
+  {
+    "id": "tr-funding",
+    "name": "Funding",
+    "description": "Cross-project funding (portfolio)",
+    "source": "tr-funding",
+    "group": "techridge",
+    "model": "opus"
+  },
+  {
+    "id": "tr-model",
+    "name": "Model",
+    "description": "Financial modeling (portfolio)",
+    "source": "tr-model",
+    "group": "techridge",
+    "model": "opus",
+    "telegramBot": "trmodel-bot"
+  },
+  {
+    "id": "swarm-orch",
+    "name": "Orchestrator",
+    "description": "Request routing & response consolidation",
+    "source": "swarm-orch",
+    "group": "swarm",
+    "model": "opus"
+  },
+  {
+    "id": "swarm-project",
+    "name": "Project",
+    "description": "Project status, scheduling, decisions",
+    "source": "swarm-project",
+    "group": "swarm",
+    "model": "opus"
+  },
+  {
+    "id": "swarm-finance",
+    "name": "Swarm Finance",
+    "description": "Financial model access & scenario analysis",
+    "source": "swarm-finance",
+    "group": "swarm",
+    "model": "gemini-thinking"
+  },
+  {
+    "id": "swarm-portfolio",
+    "name": "Portfolio",
+    "description": "Cross-project health & conflict detection",
+    "source": "swarm-portfolio",
+    "group": "swarm",
+    "model": "gemini-thinking"
+  }
+]

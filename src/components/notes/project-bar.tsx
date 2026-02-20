@@ -12,7 +12,7 @@ interface ProjectBarProps {
 
 export function ProjectBar({ projects, activeProjectId, onSelectProject }: ProjectBarProps) {
   return (
-    <ScrollArea className="w-full">
+    <ScrollArea className="w-full hidden md:block">
       <div className="flex items-center gap-1 px-3 py-1.5">
         {projects.map((project) => (
           <button
@@ -31,6 +31,15 @@ export function ProjectBar({ projects, activeProjectId, onSelectProject }: Proje
             `}
           >
             {project.name}
+            {project.external_id && (
+              <span className={`text-[10px] font-mono ${
+                activeProjectId === project.id
+                  ? "text-primary-foreground/70"
+                  : "text-muted-foreground/60"
+              }`}>
+                {project.external_id}
+              </span>
+            )}
             {project.noteCount > 0 && (
               <Badge
                 variant={activeProjectId === project.id ? "secondary" : "outline"}

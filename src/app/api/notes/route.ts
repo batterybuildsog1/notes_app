@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   getNotesWithEntities,
   createNote,
+  upsertNoteByExternalEventId,
   NoteWithEntities,
   getTemplateById,
   queueForEnrichment,
@@ -9,6 +10,7 @@ import {
 import { getAuthUserId } from "@/lib/auth";
 import { checkServiceAuth } from "@/lib/service-auth";
 import { checkRateLimit, rateLimitHeaders } from "@/lib/rate-limit";
+import { dispatchWebhooks } from "@/lib/webhooks";
 
 async function getUserId(request: NextRequest): Promise<string | null> {
   // Try session auth first
@@ -51,6 +53,7 @@ export async function GET(request: NextRequest) {
     const personId = searchParams.get("person") || undefined;
     const companyId = searchParams.get("company") || undefined;
     const projectId = searchParams.get("project") || undefined;
+    const projectExternalId = searchParams.get("projectExternalId") || undefined;
     const source = searchParams.get("source") || undefined;
 
     // Single query path for main list + entity filters (no N+1)
@@ -64,6 +67,7 @@ export async function GET(request: NextRequest) {
         personId,
         companyId,
         projectId,
+        projectExternalId,
         source,
       }
     );
@@ -99,7 +103,7 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
     let { title, content, category, tags } = body;
-    const { priority, project, source, original_created_at, original_updated_at, templateId } = body;
+    const { priority, project, source, external_event_id, original_created_at, original_updated_at, templateId } = body;
 
     // If templateId provided, load template and use as defaults
     if (templateId) {
@@ -146,31 +150,59 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const note = await createNote({
-      title,
-      content: content.trim(),
-      user_id: userId,
-      category: category?.trim(),
-      tags: Array.isArray(tags) ? tags.map((t: string) => t.trim()) : undefined,
-      priority: priority?.trim(),
-      project: project?.trim(),
-      source: source?.trim(),
-      original_created_at: original_created_at || undefined,
-      original_updated_at: original_updated_at || undefined,
-    });
+    let note;
+    let wasCreated = true;
+
+    // If external_event_id provided, use upsert for deduplication
+    if (external_event_id && typeof external_event_id === "string") {
+      const result = await upsertNoteByExternalEventId({
+        title,
+        content: content.trim(),
+        user_id: userId,
+        external_event_id: external_event_id.trim(),
+        category: category?.trim(),
+        tags: Array.isArray(tags) ? tags.map((t: string) => t.trim()) : undefined,
+        priority: priority?.trim(),
+        project: project?.trim(),
+        source: source?.trim(),
+      });
+      note = result.note;
+      wasCreated = result.created;
+    } else {
+      note = await createNote({
+        title,
+        content: content.trim(),
+        user_id: userId,
+        category: category?.trim(),
+        tags: Array.isArray(tags) ? tags.map((t: string) => t.trim()) : undefined,
+        priority: priority?.trim(),
+        project: project?.trim(),
+        source: source?.trim(),
+        external_event_id: undefined,
+        original_created_at: original_created_at || undefined,
+        original_updated_at: original_updated_at || undefined,
+      });
+    }
 
     // FAST RETURN: Send response immediately, enrich in background
-    // This makes note creation feel instant (<100ms)
     const response = NextResponse.json(
       { ...note, enrichment_status: "pending" },
-      { status: 201, headers: rateLimitHeaders(rateLimit) }
+      { status: wasCreated ? 201 : 200, headers: rateLimitHeaders(rateLimit) }
     );
 
     // Fire-and-forget: Queue enrichment without blocking response
-    // All slow operations (clarity check, Telegram, embedding) happen async
     queueForEnrichment(note.id, userId).catch(err => {
       console.error(`[ENRICHMENT] Failed to queue note ${note.id}:`, err);
     });
+
+    // Fire webhooks (non-blocking)
+    dispatchWebhooks(userId, wasCreated ? "note.created" : "note.updated", {
+      note_id: note.id,
+      title: note.title,
+      category: note.category,
+      source: note.source,
+      external_event_id: note.external_event_id,
+    }).catch(() => {});
 
     return response;
   } catch (error) {
