@@ -69,6 +69,7 @@ export interface Note {
   category: string | null;
   tags: string[] | null;
   priority: string | null;
+  note_type: string | null;
   project: string | null;
   source: string | null;
   external_event_id: string | null;  // For deduplication of swarm artifacts
@@ -1378,4 +1379,172 @@ export async function resetStaleQueueItems(): Promise<number> {
     RETURNING id
   `;
   return result.length;
+}
+
+/**
+ * Hybrid search combining full-text (tsvector) + semantic (pgvector) with RRF fusion.
+ * Falls back to ILIKE + semantic if search_vector column doesn't exist yet.
+ */
+export async function hybridSearch(
+  userId: string,
+  query: string,
+  queryEmbedding: number[],
+  options?: { limit?: number; category?: string; noteType?: string }
+): Promise<(Note & { score: number; matchType: string })[]> {
+  const limit = options?.limit ?? 15;
+  const embeddingStr = `[${queryEmbedding.join(",")}]`;
+
+  try {
+    // Try tsvector-based hybrid search first
+    const rows = await sql`
+      WITH semantic AS (
+        SELECT id,
+          1 - (embedding <=> ${embeddingStr}::vector) as sim_score,
+          ROW_NUMBER() OVER (ORDER BY embedding <=> ${embeddingStr}::vector) as rank
+        FROM notes
+        WHERE user_id = ${userId}
+          AND embedding IS NOT NULL
+          ${options?.category ? sql`AND category = ${options.category}` : sql``}
+          ${options?.noteType ? sql`AND note_type = ${options.noteType}` : sql``}
+        ORDER BY embedding <=> ${embeddingStr}::vector
+        LIMIT 30
+      ),
+      keyword AS (
+        SELECT id,
+          ts_rank(search_vector, plainto_tsquery('english', ${query})) as text_score,
+          ROW_NUMBER() OVER (ORDER BY ts_rank(search_vector, plainto_tsquery('english', ${query})) DESC) as rank
+        FROM notes
+        WHERE user_id = ${userId}
+          AND search_vector @@ plainto_tsquery('english', ${query})
+          ${options?.category ? sql`AND category = ${options.category}` : sql``}
+          ${options?.noteType ? sql`AND note_type = ${options.noteType}` : sql``}
+        LIMIT 30
+      ),
+      combined AS (
+        SELECT
+          COALESCE(s.id, k.id) as id,
+          COALESCE(1.0/(60 + s.rank), 0) + COALESCE(1.0/(60 + k.rank), 0) as rrf_score,
+          CASE
+            WHEN s.id IS NOT NULL AND k.id IS NOT NULL THEN 'hybrid'
+            WHEN s.id IS NOT NULL THEN 'semantic'
+            ELSE 'keyword'
+          END as match_type
+        FROM semantic s
+        FULL OUTER JOIN keyword k ON s.id = k.id
+      )
+      SELECT n.*,
+        COALESCE(n.original_created_at, n.created_at) as display_created_at,
+        COALESCE(n.original_updated_at, n.updated_at) as display_updated_at,
+        c.rrf_score as score,
+        c.match_type as "matchType"
+      FROM combined c
+      JOIN notes n ON n.id = c.id
+      ORDER BY c.rrf_score DESC
+      LIMIT ${limit}
+    `;
+    return rows as (Note & { score: number; matchType: string })[];
+  } catch {
+    // Fallback: search_vector column may not exist yet — use ILIKE + semantic
+    const searchPattern = `%${query.trim()}%`;
+    const rows = await sql`
+      WITH semantic AS (
+        SELECT id,
+          ROW_NUMBER() OVER (ORDER BY embedding <=> ${embeddingStr}::vector) as rank
+        FROM notes
+        WHERE user_id = ${userId} AND embedding IS NOT NULL
+          ${options?.category ? sql`AND category = ${options.category}` : sql``}
+        ORDER BY embedding <=> ${embeddingStr}::vector
+        LIMIT 30
+      ),
+      keyword AS (
+        SELECT id,
+          ROW_NUMBER() OVER (ORDER BY updated_at DESC) as rank
+        FROM notes
+        WHERE user_id = ${userId}
+          AND (title ILIKE ${searchPattern} OR content ILIKE ${searchPattern})
+          ${options?.category ? sql`AND category = ${options.category}` : sql``}
+        LIMIT 30
+      ),
+      combined AS (
+        SELECT
+          COALESCE(s.id, k.id) as id,
+          COALESCE(1.0/(60 + s.rank), 0) + COALESCE(1.0/(60 + k.rank), 0) as rrf_score,
+          CASE
+            WHEN s.id IS NOT NULL AND k.id IS NOT NULL THEN 'hybrid'
+            WHEN s.id IS NOT NULL THEN 'semantic'
+            ELSE 'keyword'
+          END as match_type
+        FROM semantic s
+        FULL OUTER JOIN keyword k ON s.id = k.id
+      )
+      SELECT n.*,
+        COALESCE(n.original_created_at, n.created_at) as display_created_at,
+        COALESCE(n.original_updated_at, n.updated_at) as display_updated_at,
+        c.rrf_score as score,
+        c.match_type as "matchType"
+      FROM combined c
+      JOIN notes n ON n.id = c.id
+      ORDER BY c.rrf_score DESC
+      LIMIT ${limit}
+    `;
+    return rows as (Note & { score: number; matchType: string })[];
+  }
+}
+
+/**
+ * Find related notes using embedding similarity + shared entities
+ */
+export async function findRelatedNotes(
+  noteId: string,
+  userId: string,
+  limit: number = 5
+): Promise<Array<{ id: string; title: string; similarity: number; sharedPeople: string[]; sharedProjects: string[] }>> {
+  // Step 1: Get similar notes by embedding distance
+  const similarRows = await sql`
+    SELECT
+      n.id,
+      n.title,
+      1 - (n.embedding <=> (SELECT embedding FROM notes WHERE id = ${noteId})) as similarity
+    FROM notes n
+    WHERE n.id != ${noteId}
+      AND n.user_id = ${userId}
+      AND n.embedding IS NOT NULL
+      AND (SELECT embedding FROM notes WHERE id = ${noteId}) IS NOT NULL
+    ORDER BY n.embedding <=> (SELECT embedding FROM notes WHERE id = ${noteId})
+    LIMIT ${limit}
+  `;
+
+  if (similarRows.length === 0) return [];
+
+  // Step 2: For each similar note, find shared people and projects
+  const results = [];
+  for (const row of similarRows) {
+    const sid = (row as { id: string }).id;
+
+    const sharedPeopleRows = await sql`
+      SELECT DISTINCT p.name
+      FROM note_people np1
+      JOIN note_people np2 ON np2.person_id = np1.person_id AND np2.note_id = ${noteId}
+      JOIN people p ON p.id = np1.person_id
+      WHERE np1.note_id = ${sid}
+    `;
+
+    const sharedProjectRows = await sql`
+      SELECT DISTINCT pr.name
+      FROM note_projects nprj1
+      JOIN note_projects nprj2 ON nprj2.project_id = nprj1.project_id AND nprj2.note_id = ${noteId}
+      JOIN projects pr ON pr.id = nprj1.project_id
+      WHERE nprj1.note_id = ${sid}
+    `;
+
+    results.push({
+      id: (row as { id: string }).id,
+      title: (row as { title: string }).title,
+      similarity: parseFloat((row as { similarity: string }).similarity?.toString() || "0"),
+      sharedPeople: (sharedPeopleRows as { name: string }[]).map(r => r.name),
+      sharedProjects: (sharedProjectRows as { name: string }[]).map(r => r.name),
+    });
+  }
+
+  return results;
 }

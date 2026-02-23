@@ -45,6 +45,9 @@ export interface EnrichmentResult {
     text: string;
     question: string;
   }>;
+  category?: string;
+  noteType?: string;
+  suggestedTitle?: string;
 }
 
 /**
@@ -146,6 +149,9 @@ For each note, return ONLY this JSON structure:
       "projects": ["Project names"]
     },
     "tags": ["relevant-keywords"],
+    "category": "Work|Personal|Ideas|Reference|Archive|Solar|Real-Estate|Finance|Family",
+    "noteType": "meeting-note|conversation|receipt|credential|task|document|contact|research|journal|decision|reference|update",
+    "suggestedTitle": "A descriptive title if the current title is empty, 'Untitled', or too short — otherwise null",
     "ambiguities": [
       {
         "type": "entity_resolution|relationship|project_identification",
@@ -160,7 +166,10 @@ Rules:
 1. Use context to resolve ambiguities when possible
 2. If uncertain (new person, unclear project), include in ambiguities
 3. nextSteps should be specific and actionable
-4. Return ONLY valid JSON
+4. category MUST be one of: Work, Personal, Ideas, Reference, Archive, Solar, Real-Estate, Finance, Family
+5. noteType MUST be one of: meeting-note, conversation, receipt, credential, task, document, contact, research, journal, decision, reference, update
+6. suggestedTitle: provide a descriptive 5-10 word title if the note title is empty, "Untitled", or under 3 characters. Otherwise set to null
+7. Return ONLY valid JSON
 
 JSON only:`;
 }
@@ -227,6 +236,16 @@ export async function batchExtractEnrichments(
       const result = parsed[note.id];
       if (!result) continue;
 
+      // Validate category against allowed list
+      const validCategories = ['Work', 'Personal', 'Ideas', 'Reference', 'Archive', 'Solar', 'Real-Estate', 'Finance', 'Family'];
+      const rawCategory = result.category;
+      const category = validCategories.includes(rawCategory) ? rawCategory : undefined;
+
+      // Validate noteType against allowed list
+      const validNoteTypes = ['meeting-note', 'conversation', 'receipt', 'credential', 'task', 'document', 'contact', 'research', 'journal', 'decision', 'reference', 'update'];
+      const rawNoteType = result.noteType;
+      const noteType = validNoteTypes.includes(rawNoteType) ? rawNoteType : undefined;
+
       results.set(note.id, {
         summary: {
           context: result.summary?.context || '',
@@ -245,6 +264,11 @@ export async function batchExtractEnrichments(
         ambiguities: (result.ambiguities || []).filter(
           (a: { question?: string }) => Boolean(a.question)
         ),
+        category,
+        noteType,
+        suggestedTitle: typeof result.suggestedTitle === 'string' && result.suggestedTitle.trim().length > 0
+          ? result.suggestedTitle.trim()
+          : undefined,
       });
     }
 

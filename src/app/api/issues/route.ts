@@ -34,6 +34,8 @@ interface IssuesReport {
     notesWithoutTags: number;
     notesWithoutEmbeddings: number;
     notesPendingEnrichment: number;
+    notesWithoutType: number;
+    notesWithoutTitle: number;
     pendingClarifications: number;
   };
 }
@@ -54,12 +56,14 @@ export async function GET(request: NextRequest) {
   try {
     // 1. Get base stats
     const statsResult = await sql`
-      SELECT 
+      SELECT
         COUNT(*) as total,
         COUNT(*) FILTER (WHERE category IS NULL) as no_category,
         COUNT(*) FILTER (WHERE tags IS NULL OR array_length(tags, 1) = 0) as no_tags,
         COUNT(*) FILTER (WHERE embedding IS NULL) as no_embedding,
-        COUNT(*) FILTER (WHERE enriched_at IS NULL AND created_at < NOW() - INTERVAL '24 hours') as pending_enrichment
+        COUNT(*) FILTER (WHERE enriched_at IS NULL AND created_at < NOW() - INTERVAL '24 hours') as pending_enrichment,
+        COUNT(*) FILTER (WHERE note_type IS NULL) as no_type,
+        COUNT(*) FILTER (WHERE title IS NULL OR length(trim(title)) < 3 OR lower(trim(title)) = 'untitled') as no_title
       FROM notes
       WHERE user_id = ${userId}
     `;
@@ -69,6 +73,8 @@ export async function GET(request: NextRequest) {
       no_tags: string;
       no_embedding: string;
       pending_enrichment: string;
+      no_type: string;
+      no_title: string;
     };
 
     const totalNotes = parseInt(stats.total);
@@ -76,6 +82,8 @@ export async function GET(request: NextRequest) {
     const notesWithoutTags = parseInt(stats.no_tags);
     const notesWithoutEmbeddings = parseInt(stats.no_embedding);
     const notesPendingEnrichment = parseInt(stats.pending_enrichment);
+    const notesWithoutType = parseInt(stats.no_type || '0');
+    const notesWithoutTitle = parseInt(stats.no_title || '0');
 
     // 2. Notes without categories (medium priority if many)
     if (notesWithoutCategory > 0) {
@@ -131,7 +139,27 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // 5. Notes stuck in enrichment (>24h, no enriched_at)
+    // 5a. Notes without note_type
+    if (notesWithoutType > 0) {
+      issues.push({
+        type: "notes_without_type",
+        severity: notesWithoutType > 200 ? "medium" : "low",
+        count: notesWithoutType,
+        description: `${notesWithoutType} notes lack a note type classification (${Math.round((notesWithoutType / totalNotes) * 100)}% of total)`,
+      });
+    }
+
+    // 5b. Notes without proper titles
+    if (notesWithoutTitle > 0) {
+      issues.push({
+        type: "notes_without_title",
+        severity: notesWithoutTitle > 100 ? "medium" : "low",
+        count: notesWithoutTitle,
+        description: `${notesWithoutTitle} notes are untitled or have very short titles`,
+      });
+    }
+
+    // 6. Notes stuck in enrichment (>24h, no enriched_at)
     if (notesPendingEnrichment > 0) {
       const sampleResult = await sql`
         SELECT id, title, created_at
@@ -253,6 +281,8 @@ export async function GET(request: NextRequest) {
         notesWithoutTags,
         notesWithoutEmbeddings,
         notesPendingEnrichment,
+        notesWithoutType,
+        notesWithoutTitle,
         pendingClarifications,
       },
     };

@@ -10,12 +10,21 @@
   },
   {
     "id": "notes-pm",
-    "name": "Notes PM",
-    "description": "Knowledge base health monitoring (read-only, every 6h)",
+    "name": "Matthew",
+    "description": "Application manager — health, diagnostics, data quality",
     "source": "notes-pm",
     "group": "core",
-    "model": "coder-thinking",
+    "model": "opus",
     "telegramBot": "notes-pm-bot"
+  },
+  {
+    "id": "notes-bot",
+    "name": "Notey",
+    "description": "Context mapper — entity resolution, project assignment, search optimization",
+    "source": "notes-bot",
+    "group": "core",
+    "model": "sonnet",
+    "telegramBot": "notes-bot"
   },
   {
     "id": "finance",
@@ -25,58 +34,6 @@
     "group": "core",
     "model": "gemini-thinking",
     "telegramBot": "finance-bot"
-  },
-  {
-    "id": "accounting",
-    "name": "Accounting",
-    "description": "Transaction categorization, weekly/monthly reports",
-    "source": "accounting",
-    "group": "core"
-  },
-  {
-    "id": "money-heaven",
-    "name": "Money Heaven",
-    "description": "Mortgage app daily health monitoring",
-    "source": "money-heaven",
-    "group": "platform",
-    "model": "gemini-3-flash",
-    "telegramBot": "money-heaven-bot"
-  },
-  {
-    "id": "cleanup",
-    "name": "Cleanup",
-    "description": "Multi-agent codebase cleanup orchestrator",
-    "source": "cleanup",
-    "group": "platform",
-    "model": "gemini-thinking",
-    "telegramBot": "cleanup-bot"
-  },
-  {
-    "id": "coder",
-    "name": "Coder",
-    "description": "Code generation tasks",
-    "source": "coder",
-    "group": "platform",
-    "model": "coder-thinking",
-    "telegramBot": "alan-coding-bot"
-  },
-  {
-    "id": "atlas",
-    "name": "Atlas",
-    "description": "Atlas agent",
-    "source": "atlas",
-    "group": "platform",
-    "model": "gemini-thinking",
-    "telegramBot": "atlas-bot"
-  },
-  {
-    "id": "finance-terms",
-    "name": "Finance Terms",
-    "description": "Lending parameter watchdog (source-cited)",
-    "source": "finance-terms",
-    "group": "platform",
-    "model": "coder-thinking",
-    "telegramBot": "trloan-bot"
   },
   {
     "id": "tr-scar",

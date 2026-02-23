@@ -7,6 +7,7 @@
  */
 
 import { trackTokenUsage, estimateTokens } from "./token-tracking";
+import { neon } from "@neondatabase/serverless";
 
 const OPENAI_API_URL = "https://api.openai.com/v1/embeddings";
 const GROK_API_URL = "https://api.x.ai/v1/chat/completions";
@@ -204,7 +205,8 @@ Respond with ONLY the category name, nothing else:`;
  */
 export async function assessNoteClarity(
   title: string,
-  content: string
+  content: string,
+  userId?: string
 ): Promise<{
   needsClarification: boolean;
   question: string | null;
@@ -215,12 +217,42 @@ export async function assessNoteClarity(
     return { needsClarification: false, question: null, confidence: 1 };
   }
 
+  // Load known entities and disambiguation rules to avoid redundant questions
+  let entityContext = "";
+  if (userId && process.env.DATABASE_URL) {
+    try {
+      const db = neon(process.env.DATABASE_URL);
+      const [people, companies, rules] = await Promise.all([
+        db`SELECT DISTINCT name FROM people WHERE user_id = ${userId} ORDER BY name LIMIT 30`,
+        db`SELECT DISTINCT name FROM companies WHERE user_id = ${userId} ORDER BY name LIMIT 20`,
+        db`SELECT entity_pattern, context_clue, resolved_name FROM entity_resolution_rules WHERE user_id = ${userId}`.catch(() => []),
+      ]);
+
+      const knownPeople = people.map(p => (p as {name: string}).name);
+      const knownCompanies = companies.map(c => (c as {name: string}).name);
+      const disambiguationRules = rules as Array<{entity_pattern: string; context_clue: string | null; resolved_name: string}>;
+
+      entityContext = `
+## Known Entities (DO NOT ask about these — they are already identified)
+Known People: ${knownPeople.join(', ')}
+Known Companies: ${knownCompanies.join(', ')}
+
+## Disambiguation Rules (these names are already resolved)
+${disambiguationRules.map(r => `- "${r.entity_pattern}"${r.context_clue ? ` (in ${r.context_clue} context)` : ''} = ${r.resolved_name}`).join('\n')}
+
+IMPORTANT: If a name in the note matches a known person, company, or disambiguation rule above, do NOT flag it as needing clarification. Only ask about truly unknown or ambiguous references.
+`;
+    } catch {
+      // Ignore errors — proceed without context
+    }
+  }
+
   try {
     const prompt = `Analyze this note and determine if it's clear enough to classify and enrich automatically.
 
 Title: ${title}
 Content: ${content.slice(0, 1500)}
-
+${entityContext}
 Consider these vagueness indicators:
 1. Is the topic/subject clear?
 2. Is there enough context to determine what this relates to?
@@ -239,6 +271,7 @@ Respond in this exact JSON format:
 
 Rules:
 - Set needsClarification=true if the note uses vague pronouns or references that make it hard to link to specific people, companies, or projects
+- Do NOT ask about names that match Known Entities or Disambiguation Rules listed above
 - The question should ask for the specific missing information (e.g., "Who is 'he' referring to?" or "Which property is this about?")
 - Short notes are fine if the entities are clearly named
 - Only ask ONE focused question about the most important missing context`;

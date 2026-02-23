@@ -1,6 +1,6 @@
 import agentsData from "@/config/agents.json";
 
-export type AgentGroup = "core" | "platform" | "techridge" | "swarm";
+export type AgentGroup = "core" | "techridge" | "swarm";
 
 export interface AgentConfig {
   id: string;
@@ -15,7 +15,6 @@ export interface AgentConfig {
 
 export const AGENT_GROUPS: { key: AgentGroup; label: string }[] = [
   { key: "core", label: "Core" },
-  { key: "platform", label: "Platform" },
   { key: "techridge", label: "TechRidge" },
   { key: "swarm", label: "Swarm" },
 ];

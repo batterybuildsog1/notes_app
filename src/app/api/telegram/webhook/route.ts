@@ -298,9 +298,17 @@ export async function POST(request: NextRequest) {
             WHERE id = ${clarification.id}
           `;
 
+          // Re-queue note for enrichment with high priority so it gets re-processed with new context
+          await sql`
+            INSERT INTO enrichment_queue (note_id, user_id, priority)
+            VALUES (${clarification.note_id}::uuid, ${DEFAULT_USER_ID}::uuid, 10)
+            ON CONFLICT (note_id) DO UPDATE
+            SET priority = 10, status = 'pending', error = NULL, attempts = 0
+          `;
+
           await sendMessage(
             chatId,
-            `Thanks — saved your clarification for note ${clarification.note_id}.`,
+            `Thanks — saved your clarification for note ${clarification.note_id}. Re-queued for enrichment.`,
             botToken
           );
           await markUpdateProcessed(update.update_id);

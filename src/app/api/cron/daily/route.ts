@@ -52,6 +52,9 @@ export async function GET(request: NextRequest) {
     actionItemsCreated: 0,
     clarificationsSent: 0,
     embedded: 0,
+    categorized: 0,
+    titled: 0,
+    typed: 0,
     errors: [] as string[],
   };
 
@@ -61,7 +64,7 @@ export async function GET(request: NextRequest) {
     // Seed queue with older unenriched notes that are not queued yet.
     await sql`
       INSERT INTO enrichment_queue (note_id, user_id, priority)
-      SELECT n.id, n.user_id, 0
+      SELECT n.id, n.user_id::uuid, 0
       FROM notes n
       WHERE n.enriched_at IS NULL
         AND n.created_at < NOW() - INTERVAL '1 hour'
@@ -72,6 +75,23 @@ export async function GET(request: NextRequest) {
         )
       ORDER BY n.created_at ASC
       LIMIT 200
+      ON CONFLICT (note_id) DO NOTHING
+    `;
+
+    // Also re-queue enriched notes that are still missing category (backlog fix)
+    await sql`
+      INSERT INTO enrichment_queue (note_id, user_id, priority)
+      SELECT n.id, n.user_id::uuid, -1
+      FROM notes n
+      WHERE n.enriched_at IS NOT NULL
+        AND n.category IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM enrichment_queue q
+          WHERE q.note_id = n.id
+            AND q.status IN ('pending', 'processing')
+        )
+      ORDER BY n.created_at ASC
+      LIMIT 50
       ON CONFLICT (note_id) DO NOTHING
     `;
 
@@ -132,6 +152,42 @@ export async function GET(request: NextRequest) {
             updated_at = NOW()
           WHERE id = ${noteId}
         `;
+
+        // Apply category if note has none and enrichment extracted one
+        if (enrichment.category) {
+          const catResult = await sql`
+            UPDATE notes SET category = ${enrichment.category}, updated_at = NOW()
+            WHERE id = ${noteId} AND category IS NULL
+          `;
+          if (catResult.length !== undefined) results.categorized++;
+        }
+
+        // Apply note_type if enrichment extracted one
+        if (enrichment.noteType) {
+          try {
+            await sql`
+              UPDATE notes SET note_type = ${enrichment.noteType}, updated_at = NOW()
+              WHERE id = ${noteId} AND (note_type IS NULL OR note_type = '')
+            `;
+            results.typed++;
+          } catch {
+            // note_type column may not exist yet — skip silently
+          }
+        }
+
+        // Apply suggested title if note is untitled
+        if (enrichment.suggestedTitle) {
+          const isUntitled = !item.title ||
+            item.title.toLowerCase().trim() === 'untitled' ||
+            item.title.trim().length < 3;
+          if (isUntitled) {
+            await sql`
+              UPDATE notes SET title = ${enrichment.suggestedTitle}, updated_at = NOW()
+              WHERE id = ${noteId}
+            `;
+            results.titled++;
+          }
+        }
 
         for (const [personName, role] of Object.entries(enrichment.summary.peopleAndRoles)) {
           try {
