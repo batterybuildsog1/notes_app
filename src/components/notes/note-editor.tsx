@@ -27,11 +27,13 @@ interface NoteEditorProps {
   onCreate?: (note: Note) => void;
   /** Back navigation for mobile */
   onBack?: () => void;
+  /** Reload note from server (used on conflict) */
+  onReload?: () => void;
 }
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
-export function NoteEditor({ note, onSave, onDelete, onCreate, onBack }: NoteEditorProps) {
+export function NoteEditor({ note, onSave, onDelete, onCreate, onBack, onReload }: NoteEditorProps) {
   const [title, setTitle] = useState(note?.title || "");
   const [content, setContent] = useState(note?.content || "");
   const [tags, setTags] = useState<string[]>(note?.tags || []);
@@ -394,7 +396,7 @@ export function NoteEditor({ note, onSave, onDelete, onCreate, onBack }: NoteEdi
             variant="outline"
             size="sm"
             className="h-6 px-2 text-xs ml-auto"
-            onClick={() => window.location.reload()}
+            onClick={() => onReload?.()}
           >
             Reload
           </Button>

@@ -252,17 +252,34 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
   }, []);
 
   const handleNoteSaved = useCallback(
-    (update: { id: string; title: string; content: string; tags: string[] | null; updated_at: Date }) => {
+    (update: { id: string; title: string; content: string; tags: string[] | null; updated_at: Date; version?: number }) => {
       setNotes((prev) =>
         prev.map((n) =>
           n.id === update.id
-            ? { ...n, title: update.title, content: update.content, tags: update.tags, updated_at: update.updated_at }
+            ? { ...n, title: update.title, content: update.content, tags: update.tags, updated_at: update.updated_at, ...(update.version !== undefined ? { version: update.version } : {}) }
             : n
         )
       );
     },
     []
   );
+
+  // Reload a single note from server (used when conflict detected)
+  const handleReload = useCallback(async () => {
+    if (!activeNoteId) return;
+    try {
+      const res = await fetch(`/api/notes/${activeNoteId}`);
+      if (res.ok) {
+        const freshNote: NoteWithEntities = await res.json();
+        setNotes((prev) => prev.map((n) => (n.id === freshNote.id ? freshNote : n)));
+        // Force NoteEditor remount by toggling activeNoteId
+        setActiveNoteId(null);
+        setTimeout(() => setActiveNoteId(freshNote.id), 0);
+      }
+    } catch {
+      // silent fail
+    }
+  }, [activeNoteId]);
 
   const handleNoteDeleted = useCallback(
     (noteId: string) => {
@@ -481,6 +498,7 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
                   onDelete={handleNoteDeleted}
                   onCreate={handleNoteCreated}
                   onBack={handleBack}
+                  onReload={handleReload}
                 />
               ) : (
                 <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-3">

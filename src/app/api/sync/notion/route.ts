@@ -372,7 +372,8 @@ async function pullFromNotion(
                   content = ${content},
                   notion_last_edited = ${page.last_edited_time},
                   original_updated_at = ${page.last_edited_time},
-                  updated_at = NOW()
+                  updated_at = NOW(),
+                  version = version + 1
               WHERE id = ${existing.id}
             `;
             updated.push(title);
