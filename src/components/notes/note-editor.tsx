@@ -20,7 +20,7 @@ import type { Note } from "@/lib/db";
 interface NoteEditorProps {
   note?: Note;
   /** Callback when note is saved (title/content changed) — used by AppShell to update sidebar */
-  onSave?: (note: { id: string; title: string; content: string; tags: string[] | null; updated_at: Date }) => void;
+  onSave?: (note: { id: string; title: string; content: string; tags: string[] | null; updated_at: Date; version?: number }) => void;
   /** Callback when note is deleted */
   onDelete?: (noteId: string) => void;
   /** Callback when a new note is created (returns the new note ID) */
@@ -38,10 +38,12 @@ export function NoteEditor({ note, onSave, onDelete, onCreate, onBack }: NoteEdi
   const [tagInput, setTagInput] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [conflict, setConflict] = useState(false);
 
   // Auto-save state
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [currentNoteId, setCurrentNoteId] = useState(note?.id);
+  const versionRef = useRef<number>(note?.version ?? 1);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const periodicTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -64,7 +66,9 @@ export function NoteEditor({ note, onSave, onDelete, onCreate, onBack }: NoteEdi
     setTagInput("");
     setCurrentNoteId(note?.id);
     currentNoteIdRef.current = note?.id;
+    versionRef.current = note?.version ?? 1;
     setSaveStatus("idle");
+    setConflict(false);
     isCreatingRef.current = false;
     lastSavedRef.current = {
       title: note?.title || "",
@@ -152,12 +156,16 @@ export function NoteEditor({ note, onSave, onDelete, onCreate, onBack }: NoteEdi
           title: t,
           content: c,
           tags: tg.length > 0 ? tg : null,
+          version: versionRef.current,
         }),
       });
       if (response.ok) {
-        // Only update lastSaved after server confirms
+        const saved = await response.json();
+        // Track the new version for future saves
+        if (saved.version) versionRef.current = saved.version;
         lastSavedRef.current = { title: t, content: c, tags: JSON.stringify(tg) };
         setSaveStatus("saved");
+        setConflict(false);
         setTimeout(() => setSaveStatus("idle"), 1500);
         onSave?.({
           id: noteId,
@@ -165,7 +173,13 @@ export function NoteEditor({ note, onSave, onDelete, onCreate, onBack }: NoteEdi
           content: c,
           tags: tg.length > 0 ? tg : null,
           updated_at: new Date(),
+          version: saved.version,
         });
+      } else if (response.status === 409) {
+        // Version conflict — another client or sync updated this note
+        setSaveStatus("error");
+        setConflict(true);
+        return; // Don't retry on conflicts
       } else {
         setSaveStatus("error");
         // Retry once after 2s
@@ -251,13 +265,19 @@ export function NoteEditor({ note, onSave, onDelete, onCreate, onBack }: NoteEdi
         JSON.stringify(current.tags) === saved.tags
       ) return;
 
-      // Use sendBeacon to flush the save
+      // Use fetch with keepalive instead of sendBeacon for proper Content-Type
       const data = JSON.stringify({
         title: current.title,
         content: current.content,
         tags: current.tags.length > 0 ? current.tags : null,
+        version: versionRef.current,
       });
-      navigator.sendBeacon(`/api/notes/${noteId}`, new Blob([data], { type: "application/json" }));
+      fetch(`/api/notes/${noteId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: data,
+        keepalive: true,
+      }).catch(() => {});
     };
 
     window.addEventListener("beforeunload", handleBeforeUnload);
@@ -364,6 +384,22 @@ export function NoteEditor({ note, onSave, onDelete, onCreate, onBack }: NoteEdi
           </Dialog>
         )}
       </div>
+
+      {/* Conflict banner */}
+      {conflict && (
+        <div className="flex items-center gap-2 px-4 py-2 bg-yellow-50 dark:bg-yellow-950 border-b border-yellow-200 dark:border-yellow-800 text-sm text-yellow-800 dark:text-yellow-200">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span>This note was updated elsewhere.</span>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-6 px-2 text-xs ml-auto"
+            onClick={() => window.location.reload()}
+          >
+            Reload
+          </Button>
+        </div>
+      )}
 
       {/* Editor content */}
       <div className="flex-1 overflow-y-auto px-4 pt-4 pb-20 md:pb-4 space-y-4">

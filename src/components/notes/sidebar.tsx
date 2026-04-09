@@ -20,6 +20,8 @@ interface SidebarProps {
   onSearch: (query: string) => void;
   onDelete?: (noteId: string) => void;
   onRefresh?: () => Promise<void>;
+  serverResults?: NoteWithEntities[];
+  serverSearchLoading?: boolean;
 }
 
 function categoryCounts(notes: NoteWithEntities[]): Record<string, number> {
@@ -181,6 +183,8 @@ export function Sidebar({
   onSearch,
   onDelete,
   onRefresh,
+  serverResults = [],
+  serverSearchLoading = false,
 }: SidebarProps) {
   const [localSearch, setLocalSearch] = useState(searchQuery);
   const [categoriesOpen, setCategoriesOpen] = useState(false);
@@ -406,6 +410,29 @@ export function Sidebar({
               onDelete={onDelete ? () => onDelete(note.id) : undefined}
             />
           ))}
+
+          {/* Server-side search results (progressive) */}
+          {serverSearchLoading && searchQuery && (
+            <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Searching all notes...
+            </div>
+          )}
+          {serverResults.length > 0 && (
+            <>
+              <div className="px-3 py-1.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wider border-t mt-1">
+                More results
+              </div>
+              {serverResults.map((note) => (
+                <SwipeNoteItem
+                  key={`server-${note.id}`}
+                  note={note}
+                  isActive={activeNoteId === note.id}
+                  onSelect={() => onSelectNote(note.id)}
+                />
+              ))}
+            </>
+          )}
         </div>
       </div>
     </aside>

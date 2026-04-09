@@ -66,8 +66,9 @@ export async function PUT(
     }
 
     const body = await request.json();
-    const { title, content, category, tags, priority, project } = body;
+    const { title, content, category, tags, priority, project, version: expectedVersion } = body;
 
+    // If client sends a version, use optimistic concurrency control
     const note = await updateNote(id, userId, {
       title,
       content,
@@ -75,9 +76,20 @@ export async function PUT(
       tags,
       priority,
       project,
+      expectedVersion: typeof expectedVersion === "number" ? expectedVersion : undefined,
     });
 
     if (!note) {
+      // If client sent a version, this is likely a conflict — check if note still exists
+      if (typeof expectedVersion === "number") {
+        const current = await getNoteById(id, userId);
+        if (current) {
+          return NextResponse.json(
+            { error: "Version conflict", serverVersion: current.version, serverNote: current },
+            { status: 409 }
+          );
+        }
+      }
       return NextResponse.json({ error: "Note not found" }, { status: 404 });
     }
 

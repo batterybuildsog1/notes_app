@@ -46,8 +46,8 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const search = searchParams.get("search") || undefined;
     const category = searchParams.get("category") || undefined;
-    const limit = parseInt(searchParams.get("limit") || "30", 10);
-    const offset = parseInt(searchParams.get("offset") || "0", 10);
+    const limit = Math.max(1, Math.min(parseInt(searchParams.get("limit") || "30", 10) || 30, 100));
+    const offset = Math.max(0, parseInt(searchParams.get("offset") || "0", 10) || 0);
 
     // Entity filters
     const personId = searchParams.get("person") || undefined;

@@ -20,6 +20,37 @@ import { enrichWithEntities } from "@/lib/entity-extraction";
 
 const sql = neon(process.env.DATABASE_URL!);
 
+/**
+ * Acquire an advisory lock to prevent concurrent syncs.
+ * Returns true if lock acquired, false if another sync is already running.
+ */
+async function acquireSyncLock(userId: string): Promise<boolean> {
+  try {
+    // Use key_value table as a lightweight mutex
+    const rows = await sql`
+      INSERT INTO key_value (key, value, updated_at)
+      VALUES (${'sync_lock:' + userId}, ${JSON.stringify({ started: new Date().toISOString() })}, NOW())
+      ON CONFLICT (key) DO UPDATE
+        SET value = ${JSON.stringify({ started: new Date().toISOString() })},
+            updated_at = NOW()
+        WHERE key_value.updated_at < NOW() - INTERVAL '5 minutes'
+      RETURNING key
+    `;
+    return rows.length > 0;
+  } catch {
+    // key_value table may not exist; allow sync to proceed
+    return true;
+  }
+}
+
+async function releaseSyncLock(userId: string): Promise<void> {
+  try {
+    await sql`DELETE FROM key_value WHERE key = ${'sync_lock:' + userId}`;
+  } catch {
+    // Non-fatal
+  }
+}
+
 interface SyncState {
   user_id: string;
   last_pull_at: Date | null;
@@ -165,6 +196,16 @@ export async function POST(request: NextRequest) {
   const userId = getServiceUserId();
   const body = await request.json().catch(() => ({}));
   const direction = body.direction || "both";
+
+  // Prevent concurrent syncs for the same user
+  const lockAcquired = await acquireSyncLock(userId);
+  if (!lockAcquired) {
+    return NextResponse.json(
+      { error: "Sync already in progress", retryAfter: 30 },
+      { status: 409 }
+    );
+  }
+
   const runStart = Date.now();
   const runId = await startSyncRun(userId, direction);
 
@@ -241,6 +282,7 @@ export async function POST(request: NextRequest) {
       pushed: result.pushed,
       errors: result.errors,
     });
+    await releaseSyncLock(userId);
 
     return NextResponse.json({
       ok: result.errors.length === 0,
@@ -257,6 +299,7 @@ export async function POST(request: NextRequest) {
       pushed: result.pushed,
       errors: [error instanceof Error ? error.message : "Unknown"],
     });
+    await releaseSyncLock(userId);
 
     return NextResponse.json(
       { error: "Sync failed", details: error instanceof Error ? error.message : "Unknown" },

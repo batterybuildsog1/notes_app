@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { signOut, useSession } from "@/lib/auth-client";
 import { Sidebar } from "./sidebar";
@@ -40,6 +40,10 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+
+  // Ref to avoid stale closures in intervals
+  const activeNoteIdRef = useRef<string | null>(null);
+  useEffect(() => { activeNoteIdRef.current = activeNoteId; }, [activeNoteId]);
 
   // View state
   const [activeView, setActiveView] = useState<ActiveView>("notes");
@@ -85,7 +89,53 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
     }
   }, [activeView, activeProjectId, activeAgentId, activeNoteId]);
 
-  // Filter notes for sidebar display
+  // Server-side hybrid search results (progressive search)
+  const [serverSearchResults, setServerSearchResults] = useState<NoteWithEntities[]>([]);
+  const [serverSearchLoading, setServerSearchLoading] = useState(false);
+  const searchAbortRef = useRef<AbortController | null>(null);
+  const serverSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Fire server-side hybrid search after 400ms debounce when query > 2 chars
+  useEffect(() => {
+    if (serverSearchTimerRef.current) clearTimeout(serverSearchTimerRef.current);
+    if (searchAbortRef.current) searchAbortRef.current.abort();
+
+    if (!searchQuery || searchQuery.trim().length < 3) {
+      setServerSearchResults([]);
+      setServerSearchLoading(false);
+      return;
+    }
+
+    setServerSearchLoading(true);
+    serverSearchTimerRef.current = setTimeout(async () => {
+      const controller = new AbortController();
+      searchAbortRef.current = controller;
+      try {
+        const res = await fetch("/api/notes/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: searchQuery.trim(), limit: 20 }),
+          signal: controller.signal,
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setServerSearchResults(data.results || []);
+        }
+      } catch (err) {
+        if ((err as Error).name !== "AbortError") {
+          console.warn("[SEARCH] Server search failed:", err);
+        }
+      } finally {
+        if (!controller.signal.aborted) setServerSearchLoading(false);
+      }
+    }, 400);
+
+    return () => {
+      if (serverSearchTimerRef.current) clearTimeout(serverSearchTimerRef.current);
+    };
+  }, [searchQuery]);
+
+  // Filter notes for sidebar display — blend local Fuse.js + server hybrid results
   const filteredNotes = useMemo(() => {
     let result = notes;
     if (categoryFilter) {
@@ -96,6 +146,13 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
     }
     return result;
   }, [notes, categoryFilter, searchQuery]);
+
+  // Deduplicated server results (only IDs not already in local results)
+  const extraServerResults = useMemo(() => {
+    if (!searchQuery || serverSearchResults.length === 0) return [];
+    const localIds = new Set(filteredNotes.map((n) => n.id));
+    return serverSearchResults.filter((n) => !localIds.has(n.id));
+  }, [searchQuery, serverSearchResults, filteredNotes]);
 
   // The currently active note object
   const activeNote = useMemo(() => {
@@ -231,7 +288,7 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
     }
   }, []);
 
-  // Pull-to-refresh handler
+  // Pull-to-refresh handler — uses ref to avoid stale closure
   const handleRefresh = useCallback(async () => {
     try {
       const params = new URLSearchParams({ limit: "50" });
@@ -239,7 +296,7 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
       if (res.ok) {
         const freshNotes: NoteWithEntities[] = await res.json();
         setNotes((prev) => {
-          const editingId = activeNoteId;
+          const editingId = activeNoteIdRef.current;
           if (!editingId) return freshNotes;
           const localNote = prev.find((n) => n.id === editingId);
           if (!localNote) return freshNotes;
@@ -254,7 +311,7 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
     } catch {
       // Silent fail
     }
-  }, [activeNoteId]);
+  }, []);
 
   const toggleTheme = () => {
     const newMode = !isDark;
@@ -269,7 +326,7 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
     router.refresh();
   };
 
-  // Background refresh (60s interval)
+  // Background refresh (60s interval) — uses ref to avoid stale closures & interval churn
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
@@ -278,10 +335,11 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
         if (res.ok) {
           const freshNotes: NoteWithEntities[] = await res.json();
           setNotes((prev) => {
-            const editingId = activeNoteId;
+            const editingId = activeNoteIdRef.current;
             if (!editingId) return freshNotes;
             const localNote = prev.find((n) => n.id === editingId);
             if (!localNote) return freshNotes;
+            // Preserve local edits for the note being edited
             return freshNotes.map((n) => (n.id === editingId ? { ...n, title: localNote.title, content: localNote.content, tags: localNote.tags } : n));
           });
           const cats = new Set<string>();
@@ -295,7 +353,8 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
       }
     }, 60000);
     return () => clearInterval(interval);
-  }, [activeNoteId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Whether we're showing a project/agent view
   const showingView = activeView === "project" || activeView === "agent";
@@ -392,6 +451,8 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
                 onSearch={handleSearch}
                 onDelete={handleNoteDeleted}
                 onRefresh={handleRefresh}
+                serverResults={extraServerResults}
+                serverSearchLoading={serverSearchLoading}
               />
             </div>
 

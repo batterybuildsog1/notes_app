@@ -2,6 +2,11 @@ import { neon } from "@neondatabase/serverless";
 
 const sql = neon(process.env.DATABASE_URL!);
 
+/** Escape LIKE/ILIKE wildcard characters so user input is treated as literal text. */
+function escapeLike(input: string): string {
+  return input.replace(/[%_\\]/g, (ch) => `\\${ch}`);
+}
+
 // Entity interfaces
 export interface Person {
   id: string;
@@ -82,6 +87,7 @@ export interface Note {
   display_updated_at?: Date;  // Computed: COALESCE(original_updated_at, updated_at)
   notion_page_id?: string | null;
   notion_last_edited?: Date | null;
+  version: number;
 }
 
 export async function getNotes(
@@ -92,7 +98,7 @@ export async function getNotes(
 ): Promise<Note[]> {
   const hasSearch = search && search.trim().length > 0;
   const hasCategory = category && category !== "all";
-  const searchPattern = hasSearch ? `%${search.trim()}%` : null;
+  const searchPattern = hasSearch ? `%${escapeLike(search.trim())}%` : null;
   const limit = options?.limit ?? 30;
   const offset = options?.offset ?? 0;
 
@@ -170,7 +176,7 @@ export async function getNotesWithEntities(
 ): Promise<NoteWithEntities[]> {
   const hasSearch = search && search.trim().length > 0;
   const hasCategory = category && category !== "all";
-  const searchPattern = hasSearch ? `%${search.trim()}%` : null;
+  const searchPattern = hasSearch ? `%${escapeLike(search.trim())}%` : null;
   const limit = options?.limit ?? 30;
   const offset = options?.offset ?? 0;
 
@@ -320,6 +326,11 @@ export async function upsertNoteByExternalEventId(data: {
   return { note: row, created };
 }
 
+export type UpdateNoteResult =
+  | { status: "ok"; note: Note }
+  | { status: "not_found" }
+  | { status: "conflict"; serverVersion: number; serverNote: Note };
+
 export async function updateNote(
   id: string,
   userId: string,
@@ -332,6 +343,7 @@ export async function updateNote(
     project?: string;
     original_created_at?: Date | string | null;
     original_updated_at?: Date | string | null;
+    expectedVersion?: number;
   }
 ): Promise<Note | null> {
   const existing = await getNoteById(id, userId);
@@ -347,6 +359,32 @@ export async function updateNote(
     ? (data.original_updated_at ? new Date(data.original_updated_at).toISOString() : null)
     : existing.original_updated_at;
 
+  // If expectedVersion is provided, use optimistic concurrency control
+  if (data.expectedVersion !== undefined) {
+    const rows = await sql`
+      UPDATE notes
+      SET
+        title = ${data.title ?? existing.title},
+        content = ${data.content ?? existing.content},
+        category = ${data.category ?? existing.category},
+        tags = ${tagsArray},
+        priority = ${data.priority ?? existing.priority},
+        project = ${data.project ?? existing.project},
+        original_created_at = ${originalCreatedAt},
+        original_updated_at = ${originalUpdatedAt},
+        version = version + 1,
+        updated_at = NOW()
+      WHERE id = ${id} AND user_id = ${userId} AND version = ${data.expectedVersion}
+      RETURNING *
+    `;
+    if (rows.length === 0) {
+      // Version mismatch — return null to signal conflict (caller handles via separate path)
+      return null;
+    }
+    return rows[0] as Note;
+  }
+
+  // No version check — legacy callers (sync, enrichment, etc.)
   const rows = await sql`
     UPDATE notes
     SET
@@ -358,6 +396,7 @@ export async function updateNote(
       project = ${data.project ?? existing.project},
       original_created_at = ${originalCreatedAt},
       original_updated_at = ${originalUpdatedAt},
+      version = version + 1,
       updated_at = NOW()
     WHERE id = ${id} AND user_id = ${userId}
     RETURNING *
@@ -1443,9 +1482,10 @@ export async function hybridSearch(
       LIMIT ${limit}
     `;
     return rows as (Note & { score: number; matchType: string })[];
-  } catch {
+  } catch (err) {
     // Fallback: search_vector column may not exist yet — use ILIKE + semantic
-    const searchPattern = `%${query.trim()}%`;
+    console.warn("[HYBRID-SEARCH] tsvector search failed, falling back to ILIKE:", err);
+    const searchPattern = `%${escapeLike(query.trim())}%`;
     const rows = await sql`
       WITH semantic AS (
         SELECT id,

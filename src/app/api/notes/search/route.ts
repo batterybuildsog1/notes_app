@@ -28,11 +28,19 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { query, limit = 15, category, noteType } = body;
+    const { query, category, noteType } = body;
+    const limit = Math.max(1, Math.min(Number(body.limit) || 15, 100));
 
-    if (!query || typeof query !== "string") {
+    if (!query || typeof query !== "string" || !query.trim()) {
       return NextResponse.json(
         { error: "Query is required" },
+        { status: 400 }
+      );
+    }
+
+    if (query.length > 10000) {
+      return NextResponse.json(
+        { error: "Query must be 10,000 characters or less" },
         { status: 400 }
       );
     }

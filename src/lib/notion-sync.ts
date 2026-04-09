@@ -58,15 +58,34 @@ interface ResolvedParent {
 }
 
 /**
- * Make authenticated request to Notion API
+ * Simple rate-limiter: enforces a minimum delay between Notion API calls
+ * to avoid hitting the 3-requests-per-second rate limit.
+ */
+let lastRequestTime = 0;
+const MIN_REQUEST_GAP_MS = 350; // ~2.8 req/s, safely under Notion's 3 req/s limit
+
+async function rateLimitDelay(): Promise<void> {
+  const now = Date.now();
+  const elapsed = now - lastRequestTime;
+  if (elapsed < MIN_REQUEST_GAP_MS) {
+    await new Promise((resolve) => setTimeout(resolve, MIN_REQUEST_GAP_MS - elapsed));
+  }
+  lastRequestTime = Date.now();
+}
+
+/**
+ * Make authenticated request to Notion API with rate limiting and retry
  */
 async function notionRequest<T>(
   endpoint: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  retries = 2
 ): Promise<T> {
   if (!NOTION_API_KEY) {
     throw new Error("NOTION_API_KEY not configured");
   }
+
+  await rateLimitDelay();
 
   const response = await fetch(`${NOTION_BASE_URL}${endpoint}`, {
     ...options,
@@ -77,6 +96,13 @@ async function notionRequest<T>(
       ...options.headers,
     },
   });
+
+  // Retry on rate limit (429) with exponential backoff
+  if (response.status === 429 && retries > 0) {
+    const retryAfter = parseInt(response.headers.get("Retry-After") || "1", 10);
+    await new Promise((resolve) => setTimeout(resolve, retryAfter * 1000));
+    return notionRequest<T>(endpoint, options, retries - 1);
+  }
 
   if (!response.ok) {
     const error = await response.text();

@@ -15,15 +15,20 @@ const fuseOptions = {
 
 // Cache Fuse instance to avoid recreation on every search
 let cachedFuse: Fuse<Note> | null = null;
-let cachedNotesRef: Note[] | null = null;
+let cachedNotesLen: number = -1;
+let cachedNotesIds: string = "";
 
 function getFuseInstance(notes: Note[]): Fuse<Note> {
-  // Only recreate if notes array reference changed
-  if (cachedFuse && cachedNotesRef === notes) {
+  // Rebuild index when notes array changes (length or first/last IDs differ)
+  const idsKey = notes.length > 0
+    ? `${notes[0].id}:${notes[notes.length - 1].id}`
+    : "";
+  if (cachedFuse && cachedNotesLen === notes.length && cachedNotesIds === idsKey) {
     return cachedFuse;
   }
   cachedFuse = new Fuse(notes, fuseOptions);
-  cachedNotesRef = notes;
+  cachedNotesLen = notes.length;
+  cachedNotesIds = idsKey;
   return cachedFuse;
 }
 
