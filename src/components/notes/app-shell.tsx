@@ -176,10 +176,25 @@ export function AppShell({ initialNotes, categories: initialCategories, initialP
   const mobileTab: MobileTab = activeView === "project" ? "projects" : activeView === "agent" ? "agents" : "notes";
 
   // Handlers
-  const handleSelectNote = useCallback((noteId: string) => {
-    setActiveNoteId(noteId);
+  const handleSelectNote = useCallback(async (noteId: string) => {
     setActiveView("notes");
-  }, []);
+    // If note is already in local state, select immediately
+    if (notes.some((n) => n.id === noteId)) {
+      setActiveNoteId(noteId);
+      return;
+    }
+    // Server-only search result: fetch full note to avoid truncated content in editor
+    try {
+      const res = await fetch(`/api/notes/${noteId}`);
+      if (res.ok) {
+        const fullNote: NoteWithEntities = await res.json();
+        setNotes((prev) => [fullNote, ...prev]);
+        setActiveNoteId(noteId);
+      }
+    } catch (err) {
+      console.error("Failed to fetch note:", err);
+    }
+  }, [notes]);
 
   const handleSelectProject = useCallback((projectId: string | null) => {
     if (projectId) {
